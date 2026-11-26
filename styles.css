@@ -1,0 +1,65 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0f;
+  --card: #17171c;
+  --ink: #f4f4f5;
+  --muted: #a1a1aa;
+  --line: rgba(255, 255, 255, 0.08);
+  --lime: #a3e635;
+  --ink-on: #111111;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { min-height: 100vh; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+#app { max-width: 520px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 28px; margin: 0; }
+h2 { font-size: 20px; margin: 0; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 14px; }
+.lead, .hint { color: var(--muted); line-height: 1.4; margin: 0; }
+.btn, .choice {
+  min-height: 52px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--lime);
+  color: var(--ink-on);
+  font-weight: 750;
+  padding: 12px 16px;
+}
+.btn.secondary, .choice.secondary { background: transparent; color: var(--ink); border: 1px solid rgba(255, 255, 255, 0.16); }
+.btn.ghost { background: #1c1c22; color: var(--ink); }
+.btn:disabled { opacity: 0.45; }
+.choice { width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; border-radius: 16px; }
+.choice.done { opacity: 0.45; }
+.choice.mine { box-shadow: inset 0 0 0 2px var(--lime); }
+.roster { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { background: #1c1c22; border-radius: 999px; min-height: 36px; padding: 8px 12px; }
+.row { display: flex; gap: 8px; }
+.row .btn { flex: 1; }
+input[type="text"], input[type="range"], input[type="file"] { width: 100%; }
+input[type="text"] {
+  min-height: 52px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #1c1c22;
+  padding: 12px 14px;
+}
+.file input { margin-top: 8px; }
+.track { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.dance {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 42px;
+}
+.warn { color: #fde68a; }
+.good { color: var(--lime); }
+.linkish { background: transparent; border: 0; color: var(--muted); min-height: 44px; font-weight: 700; }
+.error { color: #fecaca; margin: 0; }

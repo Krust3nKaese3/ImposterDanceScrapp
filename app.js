@@ -1,0 +1,897 @@
+/*
+ * Imposter Dance. Host verteilt fertige Clips, alle starten auf einem gemeinsamen Zeitpunkt.
+ */
+(function () {
+  'use strict';
+
+  const A = window.ImposterAudio;
+  const L = window.ImposterLogic;
+  const AN = window.ImposterAnnounce;
+  const LOBBY_KEY = 'imposterdance.lobby.v1';
+  const SCRAP_URL = 'https://github.com/Krust3nKaese3/ImposterDanceScrapp';
+
+  const state = {
+    screen: 'lobby',
+    shell: 'index',
+    seated: [],
+    directory: [],
+    query: '',
+    creating: false,
+    draftName: '',
+    draftTag: '',
+    tracks: [],
+    match: L.createMatch([]),
+    error: '',
+    info: '',
+    role: 'solo',
+    selfDevice: '',
+    roomCode: '',
+    claims: {},
+    myPid: '',
+    audioOn: false,
+    guestHint: false,
+    clip: null,
+    nextClip: null,
+    clock: L.createClock(),
+    offset: 0,
+    playSource: null,
+    qr: { open: '', hostLink: 'wlan', ssid: '', pass: '', note: '', image: '', share: '', copied: false, requests: [] },
+    busy: false
+  };
+
+  const assembler = A.createAssembler();
+  let announced = null;
+
+  function bridge() {
+    return window.OpenScrBridge || window.EveryAppBridge || null;
+  }
+
+  function mpApi() {
+    const api = bridge();
+    return api && api.multiplayer ? api.multiplayer : null;
+  }
+
+  function isGuest() {
+    const api = bridge();
+    return Boolean(api && api.guest === true) || state.role === 'guest';
+  }
+
+  function isHost() {
+    return state.role === 'host' || state.role === 'solo';
+  }
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+  }
+
+  function labelOf(player) {
+    if (!player) return '';
+    if (player.tag) return player.name + '#' + player.tag;
+    return player.name || player.first || '';
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  function render() {
+    const root = $('app');
+    if (!root) return;
+    root.innerHTML = state.shell === 'qr' ? qrHtml() : screenHtml();
+    mountShared();
+  }
+
+  function screenHtml() {
+    if (state.screen === 'lobby') return lobbyHtml();
+    if (state.screen === 'library') return libraryHtml();
+    if (state.screen === 'deal' || state.screen === 'ready') return readyHtml();
+    if (state.screen === 'dance') return danceHtml();
+    if (state.screen === 'vote') return voteHtml();
+    if (state.screen === 'reveal') return revealHtml();
+    return lobbyHtml();
+  }
+
+  function header() {
+    const code = state.roomCode ? ' · ' + esc(state.roomCode) : '';
+    return `<div class="top"><div><h1>Imposter Dance</h1><p class="hint">Runde ${state.match.round || 0}${code}</p></div>
+      ${isHost() && !isGuest() ? '<button type="button" class="btn ghost" data-act="qr">Einladen</button>' : ''}</div>`;
+  }
+
+  function banners() {
+    const bits = [];
+    if (state.error) bits.push(`<p class="error" role="alert">${esc(state.error)}</p>`);
+    if (state.info) bits.push(`<p class="hint">${esc(state.info)}</p>`);
+    if (isGuest()) bits.push('<p class="warn">Tab offen lassen, sonst bricht der Ton ab.</p>');
+    return bits.join('');
+  }
+
+  function lobbyHtml() {
+    if (window.OpenScrRoster) {
+      return `${header()}<div class="stack">${banners()}<div id="openscr-roster"></div></div>`;
+    }
+    const chips = state.seated.map((player) => `<span class="chip">${esc(labelOf(player))}</span>`).join('');
+    const hits = state.directory.filter((player) => {
+      const needle = state.query.trim().toLowerCase();
+      if (!needle) return true;
+      return labelOf(player).toLowerCase().includes(needle);
+    }).slice(0, 12);
+    const suggest = hits.map((player) => `<button type="button" class="choice secondary" data-act="pick" data-id="${esc(player.id)}">${esc(labelOf(player))}</button>`).join('');
+    const create = state.creating
+      ? `<input id="draft-name" maxlength="16" placeholder="Anzeigename" aria-label="Anzeigename" value="${esc(state.draftName)}">
+         <input id="draft-tag" maxlength="5" placeholder="Tag" aria-label="Tag" value="${esc(state.draftTag)}">
+         <button type="button" class="btn" data-act="save-person">Speichern und hinzufügen</button>
+         <button type="button" class="btn ghost" data-act="cancel-person">Zurück</button>`
+      : '<button type="button" class="btn secondary" data-act="new-person">Neue Person</button>';
+    return `${header()}<div class="stack">${banners()}
+      <input id="name-query" maxlength="80" placeholder="Name eingeben" aria-label="Name suchen" value="${esc(state.query)}">
+      ${suggest}
+      ${isGuest() ? '' : create}
+      <div class="roster">${chips}</div>
+      ${isGuest() ? '<p class="hint">Der Host startet die Runde.</p>' : `<button type="button" class="btn" data-act="to-library" ${state.seated.length < L.MIN_PLAYERS ? 'disabled' : ''}>Musik wählen</button>`}
+      <p class="hint">Ab ${L.MIN_PLAYERS} Personen. Jede hört über das eigene Handy und eigene Kopfhörer. Der Host bleibt auf Android. iOS kommt als Browser-Gast dazu.</p>
+    </div>`;
+  }
+
+  function libraryHtml() {
+    const rows = state.tracks.map((track) => {
+      const max = Math.max(0, track.seconds - A.SECONDS);
+      return `<div class="track"><strong>${esc(track.name)}</strong>
+        <label>Start bei ${track.start.toFixed(1)} s
+          <input type="range" min="0" max="${max.toFixed(2)}" step="0.1" value="${track.start}" data-act="start-at" data-id="${esc(track.id)}" ${track.random ? 'disabled' : ''}>
+        </label>
+        <button type="button" class="btn ghost" data-act="toggle-random" data-id="${esc(track.id)}">${track.random ? 'Zufälliger Start: an' : 'Zufälliger Start: aus'}</button>
+      </div>`;
+    }).join('');
+    return `${header()}<div class="stack">${banners()}
+      <section class="card stack">
+        <h2>Songs vom Host-Handy</h2>
+        <p class="hint">MP3 auswählen. Daraus wird vor dem Start ein 10-Sekunden-Schnipsel von etwa 160 KB. Es geht komplett über das WLAN, nichts wird gestreamt.</p>
+        <button type="button" class="btn secondary" data-act="pick-file">MP3 wählen</button>
+        <input id="file-pick" type="file" accept="audio/mpeg,audio/mp3,.mp3" multiple hidden>
+        ${rows || '<p class="hint">Noch keine Datei.</p>'}
+      </section>
+      <button type="button" class="btn" data-act="prepare" ${!state.tracks.length || state.busy ? 'disabled' : ''}>Runde vorbereiten</button>
+      <button type="button" class="btn ghost" data-act="back-lobby">Zurück</button>
+    </div>`;
+  }
+
+  function readyHtml() {
+    const rows = state.match.players.map((player) => {
+      const on = state.match.ready[player.id] ? 'bereit' : 'lädt';
+      return `<div class="choice secondary"><span>${esc(player.name)}</span><span>${on}</span></div>`;
+    }).join('');
+    const mine = state.myPid ? state.match.players.find((player) => player.id === state.myPid) : null;
+    const unlock = state.audioOn
+      ? ''
+      : '<button type="button" class="btn" data-act="unlock">Bereit</button><p class="hint">Bereit schaltet den Ton frei und hält das Display wach.</p>';
+    return `${header()}<div class="stack">${banners()}
+      <section class="card stack"><h2>Alle müssen geladen haben</h2>${rows}</section>
+      ${unlock}
+      <p class="hint">${mine ? esc(mine.name) + ' hört auf diesem Handy.' : 'Wähle, wer auf diesem Handy hört.'}</p>
+      ${namePicker()}
+      ${isHost() && !isGuest() ? `<button type="button" class="btn" data-act="play" ${L.allReady(state.match) && state.audioOn ? '' : 'disabled'}>Abspielen</button>` : '<p class="hint">Der Host startet, sobald jede Person geladen hat.</p>'}
+    </div>`;
+  }
+
+  function namePicker() {
+    return state.match.players.map((player) => `<button type="button" class="choice ${player.id === state.myPid ? 'mine' : ''}" data-act="hear-as" data-id="${esc(player.id)}">${esc(player.name)}</button>`).join('');
+  }
+
+  function danceHtml() {
+    return `${header()}<div class="stack">${banners()}
+      <section class="card dance" aria-live="polite"><div>♫</div><p class="hint">10 Sekunden. Danach wird abgestimmt.</p></section>
+    </div>`;
+  }
+
+  function voteHtml() {
+    const vote = state.match.vote || { ballots: {}, claimed: {} };
+    const claimed = state.pendingClaim || '';
+    if (claimed && vote.claimed[claimed] && !vote.ballots[claimed]) {
+      const choices = state.match.players.filter((player) => player.id !== claimed).map((player) =>
+        `<button type="button" class="choice" data-act="suspect" data-id="${esc(player.id)}">${esc(player.name)}</button>`).join('');
+      const who = state.match.players.find((player) => player.id === claimed);
+      return `${header()}<div class="stack">${banners()}
+        <h2>${esc(who ? who.name : '')} stimmt</h2>
+        <p class="hint">Wen wählt ihr raus?</p>
+        ${choices}
+        <button type="button" class="btn secondary" data-act="vote-back">Zurück</button>
+      </div>`;
+    }
+    const names = state.match.players.map((player) => {
+      const done = Boolean(vote.ballots[player.id]);
+      return `<button type="button" class="choice ${done ? 'done' : ''}" data-act="claim" data-id="${esc(player.id)}" ${done ? 'disabled' : ''}>${esc(player.name)}</button>`;
+    }).join('');
+    return `${header()}<div class="stack">${banners()}
+      <h2>Wer ist der Imposter?</h2>
+      <p class="hint">Keine feste Reihenfolge. Jede Person tippt den eigenen Namen. Zurück verbraucht den Zug nicht. Liegt nur ein Handy herum, geht dieselbe Liste reihum.</p>
+      ${names}
+    </div>`;
+  }
+
+  function revealHtml() {
+    const last = state.match.last;
+    const name = state.match.players.find((player) => player.id === (last && last.imposterId));
+    const title = last && last.caught ? 'Imposter erwischt' : 'Imposter entkommt';
+    const scores = state.match.players.map((player) => `<div class="choice secondary"><span>${esc(player.name)}</span><span>${player.score}</span></div>`).join('');
+    return `${header()}<div class="stack">${banners()}
+      <section class="card stack">
+        <h2 class="${last && last.caught ? 'good' : 'warn'}">${title}</h2>
+        <p class="lead">${esc(name ? name.name : '')} war der Imposter.</p>
+      </section>
+      ${scores}
+      ${isHost() && !isGuest() ? '<button type="button" class="btn" data-act="next">Nächste Runde</button>' : '<p class="hint">Der Host startet die nächste Runde.</p>'}
+      <button type="button" class="btn ghost" data-act="back-lobby">Zur Lobby</button>
+    </div>`;
+  }
+
+  function qrHtml() {
+    return `${header()}<div class="stack">${banners()}<div id="openscr-qr"></div>
+      <button type="button" class="btn ghost" data-act="close-qr">Zurück zum Spiel</button></div>`;
+  }
+
+  function rosterModel() {
+    return {
+      query: state.query,
+      directory: state.directory.map((player) => ({ id: String(player.id), label: labelOf(player) })),
+      seated: state.seated.map((player) => ({ id: String(player.id), pid: String(player.id), label: labelOf(player) })),
+      startLabel: 'Musik wählen',
+      startDisabled: state.seated.length < L.MIN_PLAYERS || isGuest(),
+      statsLabel: 'Mitspieler',
+      canRemove: !isGuest(),
+      rulesHtml: '<p>Dieselbe Stelle, zehn Sekunden, eigene Kopfhörer. Eine Person hört nur „Du bist der Imposter“ und danach Stille. Danach stimmt ihr ab.</p>'
+    };
+  }
+
+  function mountShared() {
+    if (state.shell === 'index' && state.screen === 'lobby' && window.OpenScrRoster) {
+      const el = $('openscr-roster');
+      if (el) {
+        window.OpenScrRoster.attach(el, {
+          onQuery: (value) => { state.query = value; },
+          onPick: (id) => { seat(id); },
+          onRemove: (id) => { if (!isGuest()) unseat(id); },
+          onCreate: (draft) => { addPerson(draft.name, draft.tag); },
+          onStart: () => { if (!isGuest()) { state.screen = 'library'; render(); } },
+          onStats: () => { state.info = state.directory.length + ' gespeicherte Namen auf diesem Gerät.'; render(); }
+        });
+        window.OpenScrRoster.setModel(rosterModel());
+      }
+    }
+    if (state.shell === 'qr' && window.OpenScrQr) {
+      const el = $('openscr-qr');
+      if (!el) return;
+      window.OpenScrQr.attach(el, {
+        onScan: () => { const mp = mpApi(); if (mp && mp.join) mp.join({ scan: true, name: 'Gast' }); },
+        onHost: () => { state.qr.open = 'host'; paintHostQr(); },
+        onDownload: () => { state.qr.open = 'download'; state.qr.share = SCRAP_URL; state.qr.note = 'In OpenScr scannen, um Imposter Dance zu laden.'; pushQr(); },
+        onWlan: () => { state.qr.hostLink = 'wlan'; paintHostQr(); },
+        onHotspot: () => { state.qr.hostLink = 'hotspot'; state.qr.note = 'Name und Passwort eintragen.'; pushQr(); },
+        onHotspotShow: (draft) => { state.qr.ssid = draft.ssid; state.qr.pass = draft.pass; paintHostQr(); },
+        onCopy: () => { copyText(state.qr.share); state.qr.copied = true; pushQr(); },
+        onShare: () => { if (navigator.share && state.qr.share) navigator.share({ title: 'Imposter Dance', url: state.qr.share }).catch(() => {}); },
+        onStop: () => { const mp = mpApi(); if (mp && mp.endRoom) mp.endRoom(); state.role = 'solo'; state.shell = 'index'; render(); },
+        onApprove: (id) => { const mp = mpApi(); if (mp && mp.approveJoin) mp.approveJoin(id); },
+        onDeny: (id) => { const mp = mpApi(); if (mp && mp.denyJoin) mp.denyJoin(id); }
+      });
+      pushQr();
+    }
+  }
+
+  function pushQr() {
+    if (!window.OpenScrQr) return;
+    window.OpenScrQr.setModel({
+      open: state.qr.open,
+      hostLink: state.qr.hostLink,
+      ssid: state.qr.ssid,
+      pass: state.qr.pass,
+      note: state.qr.note,
+      image: state.qr.image,
+      share: state.qr.share,
+      copied: state.qr.copied,
+      requests: state.qr.requests
+    });
+  }
+
+  async function paintHostQr() {
+    state.qr.open = 'host';
+    await ensureHost();
+    const mp = mpApi();
+    if (state.qr.hostLink === 'wlan' && mp && mp.showWifiQr) {
+      try { await mp.showWifiQr(); state.qr.note = 'Stellt sicher, dass ihr im selben WLAN seid.'; } catch (error) { state.qr.note = errorText(error); }
+    } else if (state.qr.hostLink === 'hotspot' && mp && mp.showHotspotQr) {
+      try { await mp.showHotspotQr(); } catch (error) { state.qr.note = errorText(error); }
+    } else if (mp && mp.showQr) {
+      try {
+        const shown = await mp.showQr();
+        if (shown && shown.roomCode) state.roomCode = shown.roomCode;
+        state.qr.note = 'Gleiches WLAN. Der Code öffnet das Spiel im Browser.';
+      } catch (error) { state.qr.note = errorText(error); }
+    } else state.qr.note = 'Die Einladung öffnet OpenScr auf dem Host-Handy.';
+    render();
+  }
+
+  function seat(id) {
+    const found = state.directory.find((player) => String(player.id) === String(id));
+    if (!found) return;
+    if (state.seated.some((player) => String(player.id) === String(found.id))) return;
+    state.seated.push({ id: String(found.id), name: found.name, tag: found.tag || '' });
+    state.query = '';
+    persistLobby();
+    publish();
+    render();
+  }
+
+  function unseat(id) {
+    state.seated = state.seated.filter((player) => String(player.id) !== String(id));
+    persistLobby();
+    publish();
+    render();
+  }
+
+  async function addPerson(name, tag) {
+    const cleanName = L.clipName(name);
+    const cleanTag = String(tag || '').replace(/[^0-9a-zA-Z]/g, '').slice(0, 5);
+    if (cleanName.length < 3 || cleanTag.length < 3) {
+      state.error = 'Name 3 bis 16 Zeichen, Tag 3 bis 5 Zeichen.';
+      render();
+      return;
+    }
+    const api = bridge();
+    if (api && api.players && api.players.add) {
+      try {
+        const created = await api.players.add({ name: cleanName, tag: cleanTag });
+        await refreshDirectory();
+        if (created && created.id) seat(created.id);
+      } catch (error) {
+        state.error = errorText(error);
+        render();
+      }
+      return;
+    }
+    const local = { id: 'p_' + Date.now().toString(36), name: cleanName, tag: cleanTag };
+    state.directory.push(local);
+    state.creating = false;
+    seat(local.id);
+  }
+
+  async function refreshDirectory() {
+    const api = bridge();
+    if (api && api.players && api.players.list) {
+      try {
+        const rows = await api.players.list();
+        if (Array.isArray(rows)) {
+          state.directory = rows.map((row) => ({ id: String(row.id), name: row.name, tag: row.tag || '' }));
+        }
+      } catch (error) {
+        state.error = errorText(error);
+      }
+    }
+  }
+
+  function syncMatchPlayers() {
+    const scores = {};
+    const round = state.match.round || 0;
+    state.match.players.forEach((player) => { scores[player.id] = player.score; });
+    state.match = L.createMatch(state.seated.map((player) => ({
+      id: player.id,
+      name: player.name,
+      score: scores[player.id] || 0
+    })));
+    state.match.round = round;
+    state.match.phase = 'lobby';
+  }
+
+  async function onFiles(list) {
+    state.error = '';
+    const files = Array.from(list || []);
+    for (let i = 0; i < files.length; i += 1) {
+      try {
+        const track = await readTrack(files[i]);
+        state.tracks.push(track);
+      } catch (error) {
+        state.error = errorText(error);
+      }
+    }
+    render();
+  }
+
+  async function readTrack(file) {
+    await unlockAudio();
+    const raw = new Uint8Array(await file.arrayBuffer());
+    const ctx = audioContext();
+    if (!ctx || !ctx.decodeAudioData) throw new Error('Dieses Handy kann die Datei nicht dekodieren.');
+    const decoded = await ctx.decodeAudioData(raw.buffer.slice(0));
+    const channels = [];
+    for (let c = 0; c < decoded.numberOfChannels; c += 1) channels.push(decoded.getChannelData(c));
+    const mono = channels.length > 1 ? A.mixToMono(channels) : A.floatChannelToInt16(channels[0]);
+    return {
+      id: 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36),
+      name: file.name,
+      pcm: mono,
+      rate: decoded.sampleRate,
+      seconds: decoded.duration,
+      start: 0,
+      random: true
+    };
+  }
+
+  function announcementBytes() {
+    if (!announced) announced = A.b64ToBytes(AN.b64);
+    return announced;
+  }
+
+  function cutPair(rng) {
+    if (!state.tracks.length) throw new Error('Zuerst eine MP3 wählen.');
+    const index = (state.match.round) % state.tracks.length;
+    const track = state.tracks[index];
+    const total = track.pcm.length;
+    const windowSamples = Math.round(A.SECONDS * track.rate);
+    const start = track.random ? A.randomStart(total, windowSamples, rng) : Math.round(track.start * track.rate);
+    const song = A.clipFromPcm(track.pcm, track.rate, start);
+    const imposter = A.imposterFromAnnouncement(announcementBytes());
+    if (song.length !== imposter.length) throw new Error('Die beiden Clips sind nicht gleich lang.');
+    return { song: song, imposter: imposter, clipId: 'c' + (state.match.round || 1) };
+  }
+
+  async function prepareRound() {
+    if (state.seated.length < L.MIN_PLAYERS) {
+      state.error = 'Mindestens drei Personen.';
+      render();
+      return;
+    }
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await ensureHost();
+      syncMatchPlayers();
+      const begun = L.beginRound(state.match, Math.random);
+      if (!begun.ok) throw new Error('Zu wenige Personen.');
+      if (!state.myPid && state.seated[0]) state.myPid = state.seated[0].id;
+      state.claims[state.myPid] = state.selfDevice || 'local';
+      const pair = cutPair(Math.random);
+      state.localPair = pair;
+      await distribute(pair);
+      state.screen = 'ready';
+      state.match.phase = 'deal';
+      deliverLocal();
+      publish();
+    } catch (error) {
+      state.error = errorText(error);
+    }
+    state.busy = false;
+    render();
+  }
+
+  async function distribute(pair) {
+    const mp = mpApi();
+    const jobs = [];
+    state.match.players.forEach((player) => {
+      const device = state.claims[player.id];
+      if (!device || device === state.selfDevice) return;
+      const bytes = player.id === state.match.imposterId ? pair.imposter : pair.song;
+      A.splitClip(bytes, pair.clipId).forEach((part) => jobs.push({ to: device, data: part }));
+    });
+    if (!mp || !jobs.length) return;
+    for (let i = 0; i < jobs.length; i += 1) {
+      await mp.send(jobs[i].data, { to: jobs[i].to });
+      if (i % 6 === 5) await wait(800);
+    }
+  }
+
+  function deliverLocal() {
+    if (!state.localPair || !state.myPid) return;
+    const bytes = state.myPid === state.match.imposterId ? state.localPair.imposter : state.localPair.song;
+    acceptClip(state.localPair.clipId, bytes);
+  }
+
+  function acceptClip(id, bytes) {
+    const parsed = A.parseClip(bytes);
+    if (!parsed) return;
+    if (id === state.match.clipId) state.clip = parsed;
+    else state.nextClip = { id: id, parsed: parsed };
+    if (state.myPid && state.audioOn) tellReady();
+  }
+
+  function tellReady() {
+    if (!state.clip || !state.myPid) return;
+    if (isHost() && !isGuest()) {
+      L.markReady(state.match, state.myPid);
+      publish();
+      render();
+      return;
+    }
+    const mp = mpApi();
+    if (mp && mp.send) mp.send({ t: 'ready', id: state.match.clipId, pid: state.myPid });
+  }
+
+  async function playRound() {
+    if (!L.allReady(state.match)) return;
+    const startAt = Date.now() + 700;
+    const armed = L.arm(state.match, startAt);
+    if (!armed.ok) return;
+    state.screen = 'dance';
+    publish();
+    const mp = mpApi();
+    if (mp && mp.broadcast) await mp.broadcast({ t: 'go', id: state.match.clipId, at: startAt });
+    schedulePlay(startAt);
+    render();
+  }
+
+  function schedulePlay(startAt) {
+    const delay = L.scheduleDelay(startAt, isHost() && !isGuest() ? 0 : state.offset, Date.now());
+    const waitMs = Math.max(0, delay);
+    const ctx = audioContext();
+    if (ctx && state.clip) {
+      startBuffer(ctx.currentTime + waitMs / 1000);
+    }
+    window.setTimeout(finishDance, waitMs + A.SECONDS * 1000);
+  }
+
+  function startBuffer(when) {
+    if (!state.clip) return;
+    const ctx = audioContext();
+    if (!ctx) return;
+    const buffer = ctx.createBuffer(1, state.clip.samples.length, state.clip.rate || A.RATE);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < state.clip.samples.length; i += 1) channel[i] = state.clip.samples[i] / 32768;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(when);
+    source.stop(when + A.SECONDS);
+    state.playSource = source;
+  }
+
+  function finishDance() {
+    if (state.match.phase !== 'dance') return;
+    if (!(isHost() && !isGuest())) return;
+    L.openVote(state.match);
+    state.screen = 'vote';
+    state.pendingClaim = '';
+    publish();
+    preloadNext();
+    render();
+  }
+
+  function preloadNext() {
+    if (!state.tracks.length) return;
+    try {
+      const round = state.match.round;
+      const track = state.tracks[round % state.tracks.length];
+      const windowSamples = Math.round(A.SECONDS * track.rate);
+      const start = A.randomStart(track.pcm.length, windowSamples, Math.random);
+      state.nextPrepared = {
+        id: 'c' + (round + 1),
+        song: A.clipFromPcm(track.pcm, track.rate, start),
+        imposter: A.imposterFromAnnouncement(announcementBytes())
+      };
+    } catch (error) {
+      state.info = 'Der nächste Schnipsel wird beim Start der Runde geschnitten.';
+    }
+  }
+
+  function onClaim(id, local) {
+    const result = L.claim(state.match, id);
+    if (!result.ok) return;
+    if (local !== false) state.pendingClaim = id;
+    publish();
+    render();
+  }
+
+  function onBack(id) {
+    const who = id || state.pendingClaim;
+    if (!who) return;
+    L.back(state.match, who);
+    if (who === state.pendingClaim) state.pendingClaim = '';
+    publish();
+    render();
+  }
+
+  function onSuspect(id, voterId) {
+    const voter = voterId || state.pendingClaim;
+    if (!voter) return;
+    const result = L.cast(state.match, voter, id);
+    if (!result.ok) {
+      state.error = 'Die Stimme gilt nur für eine andere Person.';
+      render();
+      return;
+    }
+    if (voter === state.pendingClaim) state.pendingClaim = '';
+    state.error = '';
+    if (!L.pendingVoters(state.match).length) L.resolve(state.match);
+    if (state.match.phase === 'reveal') state.screen = 'reveal';
+    else state.screen = 'vote';
+    publish();
+    render();
+  }
+
+  function publish() {
+    if (!(isHost() && !isGuest())) return;
+    const mp = mpApi();
+    if (!mp || !mp.broadcast) return;
+    const view = L.publicView(state.match, '');
+    view.seated = state.seated;
+    view.screen = state.screen;
+    mp.broadcast(view);
+  }
+
+  function applyState(view) {
+    if (!view || view.t !== 'state') return;
+    const scores = {};
+    (view.players || []).forEach((player) => { scores[player.id] = player.score; });
+    const match = L.createMatch(view.players || []);
+    match.players.forEach((player) => { player.score = scores[player.id] || 0; });
+    match.round = view.round || 0;
+    match.phase = view.phase || 'lobby';
+    match.clipId = view.clipId || '';
+    match.startAt = view.startAt || 0;
+    match.ready = view.ready || {};
+    match.imposterId = view.imposterId || null;
+    match.last = view.last || null;
+    if (view.phase === 'vote' || view.phase === 'reveal') {
+      match.vote = { ballots: {}, claimed: {} };
+      (view.ballots || []).forEach((id) => { match.vote.ballots[id] = 'hidden'; });
+      (view.claimed || []).forEach((id) => { match.vote.claimed[id] = true; });
+    }
+    state.match = match;
+    if (Array.isArray(view.seated)) state.seated = view.seated;
+    state.screen = view.screen || phaseScreen(view.phase);
+    render();
+  }
+
+  function phaseScreen(phase) {
+    if (phase === 'deal' || phase === 'ready') return 'ready';
+    if (phase === 'dance') return 'dance';
+    if (phase === 'vote') return 'vote';
+    if (phase === 'reveal') return 'reveal';
+    return 'lobby';
+  }
+
+  function onNet(message) {
+    const data = message && message.data ? message.data : message;
+    if (!data || typeof data !== 'object') return;
+    if (data.t === 'state') {
+      applyState(data);
+      return;
+    }
+    if (data.t === 'clip') {
+      const done = A.pushChunk(assembler, data);
+      if (done) acceptClip(data.id, done);
+      return;
+    }
+    if (data.t === 'sync' && data.phase === 'q' && isHost() && !isGuest()) {
+      const mp = mpApi();
+      const from = message && message.from;
+      if (mp && from) mp.send({ t: 'sync', phase: 'a', t1: data.t1, t2: Date.now(), t3: Date.now() }, { to: from });
+      return;
+    }
+    if (data.t === 'sync' && data.phase === 'a') {
+      const t4 = Date.now();
+      const offset = L.ntpOffset(data.t1, data.t2, data.t3, t4);
+      const delay = L.ntpDelay(data.t1, data.t2, data.t3, t4);
+      L.pushSample(state.clock, offset, delay);
+      state.offset = L.clockOffset(state.clock);
+      return;
+    }
+    if (data.t === 'hear' && isHost()) {
+      state.claims[data.pid] = message.from || data.device || '';
+      publish();
+      return;
+    }
+    if (data.t === 'ready' && isHost()) {
+      if (data.id === state.match.clipId) L.markReady(state.match, data.pid);
+      publish();
+      render();
+      return;
+    }
+    if (data.t === 'go') {
+      state.screen = 'dance';
+      state.match.phase = 'dance';
+      schedulePlay(data.at);
+      render();
+      return;
+    }
+    if (data.t === 'vote' && isHost()) {
+      if (data.step === 'claim') onClaim(data.pid, false);
+      if (data.step === 'back') onBack(data.pid);
+      if (data.step === 'cast') onSuspect(data.suspect, data.pid);
+    }
+  }
+
+  function sendVote(step, extra) {
+    if (isHost() && !isGuest()) {
+      if (step === 'claim') onClaim(extra.pid, true);
+      if (step === 'back') onBack(state.pendingClaim);
+      if (step === 'cast') onSuspect(extra.suspect, state.pendingClaim);
+      return;
+    }
+    if (step === 'claim') state.pendingClaim = extra.pid;
+    if (step === 'back' || step === 'cast') state.pendingClaim = '';
+    const mp = mpApi();
+    if (mp && mp.send) mp.send(Object.assign({ t: 'vote', step: step }, extra));
+    render();
+  }
+
+  async function ensureHost() {
+    if (isGuest()) return;
+    const mp = mpApi();
+    if (!mp || state.role === 'host') return;
+    const room = await mp.host({ name: 'Host', maxPlayers: 16, discoverable: true, joinApproval: true });
+    state.role = 'host';
+    state.roomCode = room && room.roomCode || '';
+    state.selfDevice = room && (room.playerId || room.selfId) || state.selfDevice;
+  }
+
+  async function bootNet() {
+    const mp = mpApi();
+    if (!mp) return;
+    mp.onMessage((message) => onNet(message));
+    mp.onPlayersChanged((roster) => {
+      if (roster && roster.roomCode) state.roomCode = roster.roomCode;
+      if (roster && roster.selfId) state.selfDevice = roster.selfId;
+    });
+    mp.onJoinRequest((request) => {
+      state.qr.requests = [{ id: request.id, name: request.name }];
+      if (state.shell === 'qr') pushQr();
+    });
+    mp.onHostAway(() => { state.info = 'Host ist kurz weg.'; render(); });
+    const back = await mp.resume();
+    if (back && back.role) {
+      state.role = back.role === 'host' ? 'host' : 'guest';
+      state.selfDevice = back.selfId || '';
+      state.roomCode = back.roomCode || '';
+      state.guestHint = state.role === 'guest';
+    } else if (bridge() && bridge().guest === true) {
+      state.role = 'guest';
+      state.guestHint = true;
+    }
+    if (state.role === 'guest') syncLoop();
+  }
+
+  function syncLoop() {
+    const mp = mpApi();
+    if (!mp || state.role !== 'guest') return;
+    const tick = () => {
+      mp.send({ t: 'sync', phase: 'q', t1: Date.now() });
+      window.setTimeout(tick, 2000);
+    };
+    tick();
+  }
+
+  function audioContext() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!state.audioCtx) state.audioCtx = new Ctx();
+    return state.audioCtx;
+  }
+
+  async function unlockAudio() {
+    const ctx = audioContext();
+    if (ctx && ctx.resume) await ctx.resume();
+    state.audioOn = true;
+    try {
+      if (navigator.wakeLock && navigator.wakeLock.request) state.wakeLock = await navigator.wakeLock.request('screen');
+    } catch (error) { /* Browser lehnt ab, bis die Geste sitzt. */ }
+    const api = bridge();
+    if (api && api.keepAwake && api.keepAwake.acquire) {
+      try { await api.keepAwake.acquire(); } catch (error) { /* Browser-Gast hält den Host nicht wach. */ }
+    }
+    if (state.clip && state.myPid) tellReady();
+    const mp = mpApi();
+    if (mp && state.myPid) mp.send({ t: 'hear', pid: state.myPid });
+    state.claims[state.myPid] = state.selfDevice || 'local';
+  }
+
+  function chooseHear(id) {
+    state.myPid = id;
+    const mp = mpApi();
+    if (mp && mp.send && !(isHost() && !isGuest())) mp.send({ t: 'hear', pid: id });
+    else state.claims[id] = state.selfDevice || 'local';
+    deliverLocal();
+    render();
+  }
+
+  async function persistLobby() {
+    const payload = JSON.stringify({ v: 1, seated: state.seated });
+    const api = bridge();
+    if (api && api.storage && api.storage.set) {
+      try { await api.storage.set(LOBBY_KEY, payload); } catch (error) { state.error = errorText(error); }
+    }
+  }
+
+  async function restoreLobby() {
+    const api = bridge();
+    if (!api || !api.storage || !api.storage.get) return;
+    try {
+      const raw = await api.storage.get(LOBBY_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.seated)) state.seated = parsed.seated;
+    } catch (error) { /* leere Lobby ist in Ordnung */ }
+  }
+
+  function copyText(value) {
+    const api = bridge();
+    if (api && api.clipboard && api.clipboard.setString) api.clipboard.setString(value);
+    else if (navigator.clipboard) navigator.clipboard.writeText(value);
+  }
+
+  function errorText(error) {
+    if (!error) return 'Unbekannter Fehler.';
+    return String(error.message || error);
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function onClick(event) {
+    const button = event.target.closest && event.target.closest('[data-act]');
+    if (!button) return;
+    const act = button.dataset.act;
+    if (act === 'pick') seat(button.dataset.id);
+    if (act === 'new-person') { state.creating = true; render(); }
+    if (act === 'cancel-person') { state.creating = false; render(); }
+    if (act === 'save-person') addPerson(($('draft-name') || {}).value, ($('draft-tag') || {}).value);
+    if (act === 'to-library') { state.screen = 'library'; render(); }
+    if (act === 'back-lobby') { state.screen = 'lobby'; state.shell = 'index'; render(); }
+    if (act === 'pick') return;
+    if (act === 'pick-file') { const input = $('file-pick'); if (input) input.click(); }
+    if (act === 'pick') return;
+    if (act === 'prepare') prepareRound();
+    if (act === 'unlock') unlockAudio().then(render);
+    if (act === 'play') playRound();
+    if (act === 'hear-as') chooseHear(button.dataset.id);
+    if (act === 'claim') sendVote('claim', { pid: button.dataset.id });
+    if (act === 'vote-back') sendVote('back', { pid: state.pendingClaim });
+    if (act === 'suspect') sendVote('cast', { pid: state.pendingClaim, suspect: button.dataset.id });
+    if (act === 'next') prepareRound();
+    if (act === 'qr') { state.shell = 'qr'; state.qr.open = ''; render(); }
+    if (act === 'close-qr') { state.shell = 'index'; render(); }
+    if (act === 'toggle-random') {
+      const track = state.tracks.find((item) => item.id === button.dataset.id);
+      if (track) track.random = !track.random;
+      render();
+    }
+  }
+
+  function onInput(event) {
+    if (event.target.id === 'name-query') {
+      state.query = event.target.value;
+      render();
+      const field = $('name-query');
+      if (field) {
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+      }
+    }
+    if (event.target.dataset && event.target.dataset.act === 'start-at') {
+      const track = state.tracks.find((item) => item.id === event.target.dataset.id);
+      if (track) track.start = Number(event.target.value) || 0;
+      const label = event.target.parentNode;
+      if (label) label.firstChild.textContent = 'Start bei ' + track.start.toFixed(1) + ' s';
+    }
+  }
+
+  document.addEventListener('click', onClick);
+  document.addEventListener('input', onInput);
+  document.addEventListener('change', (event) => {
+    if (event.target.id === 'file-pick') onFiles(event.target.files);
+  });
+
+  window.ImposterDance = {
+    state: state,
+    prepareRound: prepareRound,
+    unlockAudio: unlockAudio
+  };
+
+  restoreLobby().then(refreshDirectory).then(() => {
+    const pick = document.getElementById('file-pick');
+    bootNet().then(() => {
+      if (!state.myPid && state.seated[0]) state.myPid = state.seated[0].id;
+      render();
+    });
+    if (pick) { /* Dateiinput liegt im Library-Screen. */ }
+  });
+})();
