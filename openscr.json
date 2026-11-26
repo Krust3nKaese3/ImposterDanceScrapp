@@ -1,0 +1,7 @@
+{
+  "name": "Imposter Dance",
+  "version": "1.0.0",
+  "description": "Alle tanzen zum selben 10-Sekunden-Schnipsel. Nur der Imposter hört die Ansage und Stille. Danach wird abgestimmt.",
+  "entrypoint": "index.html",
+  "permissions": ["storage", "multiplayer"]
+}
