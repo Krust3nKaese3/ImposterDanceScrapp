@@ -36,6 +36,7 @@ h2 { font-size: 20px; margin: 0; }
 .btn.bad { background: #3f1d1d; color: #fecaca; }
 .btn:disabled { opacity: 0.38; cursor: default; }
 .orl-person { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 8px 4px 12px; border-radius: 999px; background: #1c1c22; }
+.orl-person.orl-self { box-shadow: inset 0 0 0 2px var(--lime); }
 .orl-ok { color: var(--lime); font-weight: 750; min-width: 28px; text-align: center; }
 .orl-x { width: 32px; min-height: 32px; border: 0; border-radius: 999px; background: transparent; color: #fecaca; font-weight: 750; }
 .loadbar { width: 72px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }

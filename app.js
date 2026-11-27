@@ -48,7 +48,7 @@
     busy: false,
     songBusy: false,
     playBusy: false,
-    danceSeconds: A.SECONDS
+    danceSeconds: 15
   };
 
   function danceSeconds() {
@@ -280,7 +280,8 @@
       const kick = host && !ready
         ? `<button type="button" class="orl-x" data-act="kick" data-id="${esc(player.id)}" aria-label="${esc(player.name)} rausnehmen">✕</button>`
         : '';
-      return `<div class="orl-person"><span>${esc(player.name)}</span>${side}${kick}</div>`;
+      const self = player.id === state.myPid ? ' orl-self' : '';
+      return `<div class="orl-person${self}"><span>${esc(player.name)}</span>${side}${kick}</div>`;
     }).join('');
   }
 
@@ -362,7 +363,7 @@
       <section class="card stack">
         <label class="field-label" for="dance-seconds">Tanzdauer: <span id="dance-seconds-label">${danceSeconds()} Sekunden</span></label>
         <input id="dance-seconds" type="range" min="3" max="30" step="1" value="${danceSeconds()}" aria-label="Tanzdauer in Sekunden" ${isHost() && !isGuest() ? '' : 'disabled'}>
-        <p class="hint">So lange läuft der Schnipsel. Der Imposter hört nur die Ansage und danach Stille. Voreinstellung ist 10 Sekunden.</p>
+        <p class="hint">So lange läuft der Schnipsel. Der Imposter hört nur die Ansage und danach Stille. Voreinstellung ist 15 Sekunden.</p>
       </section>
     </div>`;
   }
@@ -382,7 +383,8 @@
           pid: String(player.id),
           label: labelOf(player),
           connected: Boolean(owner),
-          claimable: (!owner || owner === mine) && (hostHere || isGuest())
+          claimable: (!owner || owner === mine) && (hostHere || isGuest()),
+          self: Boolean(owner) && owner === mine
         };
       }),
       startLabel: 'Musik wählen',
@@ -1086,6 +1088,7 @@
     view.claims = state.claims;
     view.screen = state.screen;
     view.progress = state.progress;
+    view.danceSeconds = danceSeconds();
     mp.broadcast(view);
   }
 
@@ -1111,6 +1114,7 @@
     if (Array.isArray(view.seated)) state.seated = view.seated;
     if (view.claims && typeof view.claims === 'object') state.claims = view.claims;
     if (view.progress && typeof view.progress === 'object') state.progress = view.progress;
+    if (view.danceSeconds != null) state.danceSeconds = A.secondsOf(view.danceSeconds);
     adoptIdentity();
     const voted = Array.isArray(view.ballots) ? view.ballots : [];
     if (state.myPid && voted.indexOf(state.myPid) < 0) state.myBallot = '';
@@ -1229,6 +1233,7 @@
     mp.onPlayersChanged((roster) => {
       if (roster && roster.roomCode) state.roomCode = roster.roomCode;
       if (roster && roster.selfId) state.selfDevice = roster.selfId;
+      if (isHost() && !isGuest()) publish();
     });
     mp.onJoinRequest((request) => {
       state.qr.requests = [{ id: request.id, name: request.name }];
@@ -1294,7 +1299,7 @@
   }
 
   async function persistLobby() {
-    const payload = JSON.stringify({ v: 1, seated: state.seated, danceSeconds: danceSeconds() });
+    const payload = JSON.stringify({ v: 2, seated: state.seated, danceSeconds: danceSeconds() });
     const api = bridge();
     if (api && api.storage && api.storage.set) {
       try { await api.storage.set(LOBBY_KEY, payload); } catch (error) { state.error = errorText(error); }
@@ -1309,7 +1314,10 @@
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.seated)) state.seated = parsed.seated;
-      if (parsed && parsed.danceSeconds != null) state.danceSeconds = A.secondsOf(parsed.danceSeconds);
+      const savedSeconds = parsed && parsed.danceSeconds != null ? A.secondsOf(parsed.danceSeconds) : null;
+      const oldDefault = !parsed || Number(parsed.v) < 2;
+      if (savedSeconds != null && !(oldDefault && savedSeconds === 10)) state.danceSeconds = savedSeconds;
+      if (oldDefault) persistLobby();
     } catch (error) { /* leere Lobby ist in Ordnung */ }
   }
 
@@ -1431,6 +1439,7 @@
       const label = $('dance-seconds-label');
       if (label) label.textContent = danceSeconds() + ' Sekunden';
       persistLobby();
+      publish();
     }
     if (event.target.dataset && event.target.dataset.act === 'start-at') {
       const track = state.tracks.find((item) => item.id === event.target.dataset.id);
