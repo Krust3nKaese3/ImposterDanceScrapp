@@ -8,6 +8,7 @@
   const L = window.ImposterLogic;
   const AN = window.ImposterAnnounce;
   const S = window.ImposterSources;
+  const H = window.ImposterHistory;
   const LOBBY_KEY = 'imposterdance.lobby.v1';
   const SCRAP_URL = 'https://github.com/Krust3nKaese3/ImposterDanceScrapp';
 
@@ -24,6 +25,8 @@
     sourceId: 'local-mp3',
     sourceQuery: '',
     hits: [],
+    historyOffers: [],
+    historyOpen: '',
     match: L.createMatch([]),
     error: '',
     info: '',
@@ -266,10 +269,12 @@
       : `<section class="card stack">
         <h2>${esc(source.name)}</h2>
         ${state.hits.length ? '' : `<p class="hint">Suche einen Titel. Der Host holt daraus ${danceSeconds()} Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>`}
-        <div class="row">
+        <div class="searchline">
           <input id="source-query" type="text" maxlength="80" placeholder="Suchen" aria-label="Musik suchen" value="${esc(state.sourceQuery)}">
           <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
+          ${historyButtons()}
         </div>
+        ${historyList()}
         <div class="hitlist" role="list">${hitButtons()}</div>
         ${picked ? trackRow(picked) : '<p class="hint">Noch nichts für die Runde gewählt.</p>'}
       </section>`;
@@ -279,6 +284,19 @@
       <button type="button" class="btn ghost" data-act="back-lobby">Zurück</button>
       ${sourceBar()}
     </div>`;
+  }
+
+  function historyButtons() {
+    return (state.historyOffers || []).map((offer) => `<button type="button" class="btn secondary" data-act="history-source" data-id="${esc(offer.source)}">${esc(offer.label)}</button>`).join('');
+  }
+
+  function historyList() {
+    const offer = (state.historyOffers || []).find((item) => item.source === state.historyOpen);
+    if (!offer || !offer.songs.length) return '';
+    return offer.songs.map((song, index) => {
+      const extra = song.artist ? `<span>${esc(song.artist)}</span>` : '';
+      return `<button type="button" class="choice secondary" data-act="history-pick" data-id="${esc(offer.source)}" data-index="${index}">${esc(song.title)}${extra}</button>`;
+    }).join('');
   }
 
   function playControl() {
@@ -751,6 +769,7 @@
   async function cutPair(rng) {
     if (!state.tracks.length) throw new Error('Zuerst eine Musik wählen.');
     const track = state.tracks[state.match.round % state.tracks.length];
+    if (H && typeof H.recordTrack === 'function') await H.recordTrack(bridge(), track);
     const song = await clipBytesFor(track, rng);
     const imposter = A.imposterFromAnnouncement(announcementBytes(), danceSeconds());
     if (song.length !== imposter.length) throw new Error('Die beiden Clips sind nicht gleich lang.');
@@ -1050,6 +1069,7 @@
     state.match.phase = 'lobby';
     publish();
     render();
+    refreshSongHistory();
   }
 
   function abortGame() {
@@ -1399,7 +1419,7 @@
     if (act === 'new-person') { state.creating = true; render(); }
     if (act === 'cancel-person') { state.creating = false; render(); }
     if (act === 'save-person') addPerson(($('draft-name') || {}).value, ($('draft-tag') || {}).value);
-    if (act === 'to-library') { state.screen = 'library'; render(); }
+    if (act === 'to-library') { state.screen = 'library'; render(); refreshSongHistory(); }
     if (act === 'back-lobby') { state.screen = 'lobby'; postShell('index'); render(); }
     if (act === 'abort') abortGame();
     if (act === 'force-song') forceNextSong();
@@ -1408,10 +1428,17 @@
     if (act === 'source') {
       state.sourceId = button.dataset.id;
       state.hits = [];
+      state.historyOpen = '';
       state.error = '';
       render();
+      refreshSongHistory();
     }
     if (act === 'search-source') searchSource();
+    if (act === 'history-source') {
+      state.historyOpen = state.historyOpen === button.dataset.id ? '' : button.dataset.id;
+      render();
+    }
+    if (act === 'history-pick') pickHistory(button.dataset.id, button.dataset.index);
     if (act === 'add-hit') addHit(button.dataset.id);
     if (act === 'pick') return;
     if (act === 'prepare') prepareRound();
@@ -1426,6 +1453,7 @@
       state.tracks = [];
       state.screen = 'library';
       render();
+      refreshSongHistory();
     }
     if (act === 'qr') applyShell('qr');
     if (act === 'close-qr') applyShell('index');
@@ -1538,6 +1566,33 @@
     });
   }
 
+  function refreshSongHistory() {
+    if (!H || typeof H.loadOffers !== 'function') return;
+    const generation = (state.historyGeneration || 0) + 1;
+    state.historyGeneration = generation;
+    H.loadOffers(bridge()).then((offers) => {
+      if (state.historyGeneration !== generation) return;
+      state.historyOffers = Array.isArray(offers) ? offers : [];
+      if (state.historyOpen && !state.historyOffers.some((offer) => offer.source === state.historyOpen)) {
+        state.historyOpen = '';
+      }
+      if (state.screen === 'library' && state.shell === 'index') render();
+    }).catch(() => {
+      if (state.historyGeneration !== generation) return;
+      state.historyOffers = [];
+      state.historyOpen = '';
+    });
+  }
+
+  function pickHistory(sourceId, index) {
+    const offer = (state.historyOffers || []).find((item) => item.source === sourceId);
+    const song = offer && offer.songs[Number(index)];
+    if (!song || !song.query) return;
+    state.sourceQuery = song.query.slice(0, 80);
+    state.historyOpen = '';
+    searchSource();
+  }
+
   async function searchSource() {
     const source = activeSource();
     if (!source || source.ui === 'files') return;
@@ -1578,7 +1633,10 @@
 
   registerLocalSource();
   S.onChange(function () {
-    if (state.screen === 'library' && state.shell === 'index') render();
+    if (state.screen === 'library' && state.shell === 'index') {
+      render();
+      refreshSongHistory();
+    }
   });
 
   const prior = window.ImposterDance || {};
