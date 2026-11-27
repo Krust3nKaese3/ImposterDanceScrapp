@@ -125,6 +125,22 @@ assert.ok(A.rms(parsedSong.samples) > 100);
 assert.ok(A.rms(parsedImposter.samples.subarray(0, 8000)) > 50);
 assert.strictEqual(A.rms(parsedImposter.samples.subarray(parsedImposter.samples.length - 1000)), 0);
 
+const longClip = new Uint8Array(A.BINARY_MAX + 20);
+longClip.set(song);
+const one = A.binaryParts(song, 'c1');
+assert.strictEqual(one.length, 1);
+assert.strictEqual(one[0].id, 'c1');
+const splitBin = A.binaryParts(longClip, 'c1');
+assert.strictEqual(splitBin.length, 2);
+splitBin.forEach((part) => assert.ok(/^[A-Za-z0-9_-]+$/.test(part.id) && part.id.length <= 32));
+splitBin.forEach((part) => assert.ok(part.bytes.length <= A.BINARY_MAX));
+const binAsm = A.createAssembler();
+assert.strictEqual(A.takeBinaryPart(binAsm, splitBin[1]), null);
+const joined = A.takeBinaryPart(binAsm, splitBin[0]);
+assert.strictEqual(joined.id, 'c1');
+assert.deepStrictEqual(joined.bytes, longClip);
+assert.strictEqual(A.takeBinaryPart(binAsm, one[0]).id, 'c1');
+
 const parts = A.splitClip(song, 'c1');
 const asm = A.createAssembler();
 let rebuilt = null;
