@@ -752,13 +752,17 @@
     const raw = (track.item && track.item.bytes) || track.bytes;
     const audioApi = bridgeAudio();
     if (raw && audioApi && typeof audioApi.cut === 'function') {
-      const clip = await audioApi.cut({
-        bytes: raw,
-        startMs: Math.round(startSeconds(track, rng) * 1000),
-        durationMs: danceSeconds() * 1000,
-        targetBytes: A.clipBytesFor(danceSeconds())
-      });
-      return clip.bytes;
+      try {
+        const clip = await audioApi.cut({
+          bytes: raw,
+          startMs: Math.round(startSeconds(track, rng) * 1000),
+          durationMs: danceSeconds() * 1000,
+          targetBytes: A.clipBytesFor(danceSeconds())
+        });
+        if (clip && clip.bytes) return clip.bytes;
+      } catch (error) {
+        /* Hermes liefert buildClip nur als Bytecode, die WebView kann den Schnitt dann nicht ausführen. */
+      }
     }
     const source = S.get(track.sourceId || 'local-mp3');
     if (!source) throw new Error('Die Musikquelle fehlt.');
