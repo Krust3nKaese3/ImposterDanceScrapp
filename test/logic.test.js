@@ -137,6 +137,10 @@ splitBin.forEach((part) => {
   assert.ok(part.bytes.length <= A.BINARY_MAX);
   assert.ok(Math.ceil(part.bytes.length / 3) * 4 <= 360000);
 });
+assert.strictEqual(A.clipBytesFor(10, A.LEGACY_RATE), 160012);
+const legacyClip = A.clipFromPcm(tone, A.RATE, 0, 10, A.LEGACY_RATE);
+assert.strictEqual(legacyClip.length, 160012);
+assert.strictEqual(A.parseClip(legacyClip).rate, 16000);
 const thirty = A.clipBytesFor(30);
 assert.ok(thirty === 30 * A.RATE + 12);
 assert.ok(A.binaryParts(new Uint8Array(thirty), 'c1').every((part) => /^[A-Za-z0-9_-]{1,32}$/.test(part.id)));

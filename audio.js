@@ -112,7 +112,12 @@
     return Math.floor(roll() * (total - window + 1));
   }
 
-  function buildClip(samples, durationMs) {
+  function outputRate(rate) {
+    return Number(rate) === 16000 ? 16000 : RATE;
+  }
+
+  function buildClip(samples, durationMs, rate) {
+    const used = outputRate(rate);
     const audio = encodeMulaw(samples);
     const out = new Uint8Array(HEADER + audio.length);
     out[0] = 0x4d;
@@ -120,8 +125,8 @@
     out[2] = 0x4c;
     out[3] = 0x57;
     const view = new DataView(out.buffer);
-    view.setUint32(4, RATE, true);
-    const duration = durationMs == null ? Math.round(audio.length / RATE * 1000) : durationMs;
+    view.setUint32(4, used, true);
+    const duration = durationMs == null ? Math.round(audio.length / used * 1000) : durationMs;
     view.setUint32(8, duration, true);
     out.set(audio, HEADER);
     return out;
@@ -133,23 +138,25 @@
     return Math.max(3, Math.min(30, Math.round(n)));
   }
 
-  function sampleCount(seconds) {
-    return RATE * secondsOf(seconds);
+  function sampleCount(seconds, rate) {
+    return outputRate(rate) * secondsOf(seconds);
   }
 
-  function clipFromPcm(samples, fromRate, startSample, seconds) {
-    const resampled = resampleLinear(samples, fromRate, RATE);
-    const start = Math.round((startSample || 0) * RATE / fromRate);
-    return buildClip(takeWindow(resampled, start, sampleCount(seconds)));
+  function clipFromPcm(samples, fromRate, startSample, seconds, rate) {
+    const used = outputRate(rate);
+    const resampled = resampleLinear(samples, fromRate, used);
+    const start = Math.round((startSample || 0) * used / fromRate);
+    return buildClip(takeWindow(resampled, start, sampleCount(seconds, used)), null, used);
   }
 
-  function imposterFromAnnouncement(announceMulaw, seconds) {
-    const spoken = resampleLinear(decodeMulaw(announceMulaw), ANNOUNCE_RATE, RATE);
-    const count = sampleCount(seconds);
+  function imposterFromAnnouncement(announceMulaw, seconds, rate) {
+    const used = outputRate(rate);
+    const spoken = resampleLinear(decodeMulaw(announceMulaw), ANNOUNCE_RATE, used);
+    const count = sampleCount(seconds, used);
     const samples = new Int16Array(count);
     const n = Math.min(spoken.length, count);
     samples.set(spoken.subarray(0, n), 0);
-    return buildClip(samples);
+    return buildClip(samples, null, used);
   }
 
   function parseClip(bytes) {
@@ -323,6 +330,7 @@
 
   return {
     RATE: RATE,
+    LEGACY_RATE: 16000,
     SECONDS: SECONDS,
     SAMPLES: SAMPLES,
     CLIP_BYTES: CLIP_BYTES,
@@ -340,7 +348,7 @@
     buildClip: buildClip,
     secondsOf: secondsOf,
     sampleCount: sampleCount,
-    clipBytesFor: function (seconds) { return HEADER + sampleCount(seconds); },
+    clipBytesFor: function (seconds, rate) { return HEADER + sampleCount(seconds, rate); },
     clipFromPcm: clipFromPcm,
     imposterFromAnnouncement: imposterFromAnnouncement,
     parseClip: parseClip,

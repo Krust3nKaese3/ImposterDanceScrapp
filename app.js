@@ -50,12 +50,18 @@
     qr: { open: '', hostLink: 'wlan', ssid: '', pass: '', note: '', image: '', share: '', copied: false, requests: [] },
     busy: false,
     songBusy: false,
+    pickWaiting: false,
     playBusy: false,
-    danceSeconds: 15
+    danceSeconds: 15,
+    legacyAudio: true
   };
 
   function danceSeconds() {
     return A.secondsOf(state.danceSeconds);
+  }
+
+  function clipRate() {
+    return state.legacyAudio ? A.LEGACY_RATE : A.RATE;
   }
 
   const assembler = A.createAssembler();
@@ -413,6 +419,11 @@
         <label class="field-label" for="dance-seconds">Tanzdauer: <span id="dance-seconds-label">${danceSeconds()} Sekunden</span></label>
         <input id="dance-seconds" type="range" min="3" max="30" step="1" value="${danceSeconds()}" aria-label="Tanzdauer in Sekunden" ${isHost() && !isGuest() ? '' : 'disabled'}>
         <p class="hint">So lange läuft der Schnipsel. Der Imposter hört nur die Ansage und danach Stille. Voreinstellung ist 15 Sekunden.</p>
+        <label class="check" for="legacy-audio">
+          <input id="legacy-audio" type="checkbox" ${state.legacyAudio ? 'checked' : ''} aria-label="Legacy-Modus" ${isHost() && !isGuest() ? '' : 'disabled'}>
+          Legacy-Modus
+        </label>
+        <p class="hint">An: 16 kHz, kleinere Pakete, schneller verteilt. Aus: 24 kHz, klarer und länger beim Laden.</p>
       </section>
     </div>`;
   }
@@ -765,10 +776,10 @@
           bytes: raw,
           startMs: Math.round(startSeconds(track, rng) * 1000),
           durationMs: danceSeconds() * 1000,
-          targetBytes: A.clipBytesFor(danceSeconds())
+          targetBytes: A.clipBytesFor(danceSeconds(), clipRate())
         });
         const parsed = clip && A.parseClip(clip.bytes);
-        if (parsed && parsed.rate === A.RATE && clip.bytes.length === A.clipBytesFor(danceSeconds())) return clip.bytes;
+        if (parsed && parsed.rate === clipRate() && clip.bytes.length === A.clipBytesFor(danceSeconds(), clipRate())) return clip.bytes;
       } catch (error) {
         /* Hermes liefert buildClip nur als Bytecode, die WebView kann den Schnitt dann nicht ausführen. */
       }
@@ -776,7 +787,7 @@
     const source = S.get(track.sourceId || 'local-mp3');
     if (!source) throw new Error('Die Musikquelle fehlt.');
     const produced = await source.getClip(track.item, startSeconds(track, rng), danceSeconds());
-    return S.toClipBytes(produced, A, danceSeconds());
+    return S.toClipBytes(produced, A, danceSeconds(), clipRate());
   }
 
   async function cutPair(rng) {
@@ -784,7 +795,7 @@
     const track = state.tracks[state.match.round % state.tracks.length];
     if (H && typeof H.recordTrack === 'function') await H.recordTrack(bridge(), track);
     const song = await clipBytesFor(track, rng);
-    const imposter = A.imposterFromAnnouncement(announcementBytes(), danceSeconds());
+    const imposter = A.imposterFromAnnouncement(announcementBytes(), danceSeconds(), clipRate());
     if (song.length !== imposter.length) throw new Error('Die beiden Clips sind nicht gleich lang.');
     return { song: song, imposter: imposter, clipId: 'c' + (state.match.round || 1) };
   }
@@ -1177,6 +1188,7 @@
     view.screen = state.screen;
     view.progress = state.progress;
     view.danceSeconds = danceSeconds();
+    view.legacyAudio = state.legacyAudio === true;
     mp.broadcast(view);
   }
 
@@ -1203,6 +1215,7 @@
     if (view.claims && typeof view.claims === 'object') state.claims = view.claims;
     if (view.progress && typeof view.progress === 'object') state.progress = view.progress;
     if (view.danceSeconds != null) state.danceSeconds = A.secondsOf(view.danceSeconds);
+    if (typeof view.legacyAudio === 'boolean') state.legacyAudio = view.legacyAudio;
     adoptIdentity();
     const voted = Array.isArray(view.ballots) ? view.ballots : [];
     if (state.myPid && voted.indexOf(state.myPid) < 0) state.myBallot = '';
@@ -1391,7 +1404,7 @@
   }
 
   async function persistLobby() {
-    const payload = JSON.stringify({ v: 2, seated: state.seated, danceSeconds: danceSeconds() });
+    const payload = JSON.stringify({ v: 2, seated: state.seated, danceSeconds: danceSeconds(), legacyAudio: state.legacyAudio === true });
     const api = bridge();
     if (api && api.storage && api.storage.set) {
       try { await api.storage.set(LOBBY_KEY, payload); } catch (error) { state.error = errorText(error); }
@@ -1409,6 +1422,7 @@
       const savedSeconds = parsed && parsed.danceSeconds != null ? A.secondsOf(parsed.danceSeconds) : null;
       const oldDefault = !parsed || Number(parsed.v) < 2;
       if (savedSeconds != null && !(oldDefault && savedSeconds === 10)) state.danceSeconds = savedSeconds;
+      if (parsed && typeof parsed.legacyAudio === 'boolean') state.legacyAudio = parsed.legacyAudio;
       if (oldDefault) persistLobby();
     } catch (error) { /* leere Lobby ist in Ordnung */ }
   }
@@ -1437,12 +1451,13 @@
     if (act === 'cancel-person') { state.creating = false; render(); }
     if (act === 'save-person') addPerson(($('draft-name') || {}).value, ($('draft-tag') || {}).value);
     if (act === 'to-library') { state.screen = 'library'; render(); refreshSongHistory(); }
-    if (act === 'back-lobby') { state.screen = 'lobby'; postShell('index'); render(); }
+    if (act === 'back-lobby') { cancelFilePick(); state.screen = 'lobby'; postShell('index'); render(); }
     if (act === 'abort') abortGame();
     if (act === 'force-song') forceNextSong();
     if (act === 'pick') return;
     if (act === 'pick-file') pickFiles();
     if (act === 'source') {
+      cancelFilePick();
       state.sourceId = button.dataset.id;
       state.hits = [];
       state.historyOpen = '';
@@ -1481,43 +1496,88 @@
     }
   }
 
+  let pickToken = 0;
+  let pickReleaseTimer = 0;
+
+  function cancelFilePick() {
+    if (!state.pickWaiting && !state.songBusy) return;
+    pickToken += 1;
+    state.pickWaiting = false;
+    state.songBusy = false;
+    clearTimeout(pickReleaseTimer);
+  }
+
+  function releasePickIfAbandoned() {
+    clearTimeout(pickReleaseTimer);
+    if (!state.pickWaiting) return;
+    pickReleaseTimer = setTimeout(() => {
+      if (!state.pickWaiting) return;
+      state.pickWaiting = false;
+      state.songBusy = false;
+      render();
+    }, 700);
+  }
+
+  function pickWasCancelled(error) {
+    const text = String((error && (error.message || error.name)) || error || '').toLowerCase();
+    return !text || /cancel|cancell|abbruch|dismiss|abort/.test(text);
+  }
+
   async function pickFiles() {
     const api = bridge();
     if (api && api.files && typeof api.files.pickAudio === 'function') {
+      const token = ++pickToken;
       state.error = '';
+      state.pickWaiting = true;
       state.songBusy = true;
       render();
       try {
         const picked = await api.files.pickAudio({ accept: ['audio/mpeg', 'audio/mp3', '.mp3'], multiple: true });
-        for (let i = 0; i < (picked || []).length; i += 1) {
-          const file = picked[i];
-          const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
-          let seconds = (Number(file.durationMs) || 0) / 1000;
-          const item = { id: id, title: file.name, bytes: file.bytes, seconds: seconds };
-          const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
-          item.pcm = decoded.item.pcm;
-          item.rate = decoded.item.rate;
-          seconds = decoded.seconds;
-          state.tracks.push({
-            id: id,
-            name: file.name,
-            sourceId: 'local-mp3',
-            bytes: null,
-            item: item,
-            seconds: seconds,
-            start: 0,
-            random: true
-          });
+        if (token !== pickToken) return;
+        clearTimeout(pickReleaseTimer);
+        state.pickWaiting = false;
+        const files = Array.isArray(picked) ? picked : [];
+        if (files.length) {
+          state.songBusy = true;
+          render();
+          for (let i = 0; i < files.length; i += 1) {
+            if (token !== pickToken) return;
+            const file = files[i];
+            const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
+            let seconds = (Number(file.durationMs) || 0) / 1000;
+            const item = { id: id, title: file.name, bytes: file.bytes, seconds: seconds };
+            const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
+            if (token !== pickToken) return;
+            item.pcm = decoded.item.pcm;
+            item.rate = decoded.item.rate;
+            seconds = decoded.seconds;
+            state.tracks.push({
+              id: id,
+              name: file.name,
+              sourceId: 'local-mp3',
+              bytes: null,
+              item: item,
+              seconds: seconds,
+              start: 0,
+              random: true
+            });
+          }
         }
       } catch (error) {
-        state.error = errorText(error);
+        if (token === pickToken && !pickWasCancelled(error)) state.error = errorText(error);
       }
+      if (token !== pickToken) return;
+      state.pickWaiting = false;
       state.songBusy = false;
       render();
       return;
     }
     const input = $('file-pick');
-    if (input) input.click();
+    if (input) {
+      state.pickWaiting = true;
+      input.value = '';
+      input.click();
+    }
   }
 
   function onInput(event) {
@@ -1531,6 +1591,12 @@
       }
     }
     if (event.target.id === 'source-query') state.sourceQuery = event.target.value;
+    if (event.target.id === 'legacy-audio') {
+      if (!(isHost() && !isGuest())) return;
+      state.legacyAudio = event.target.checked === true;
+      persistLobby();
+      publish();
+    }
     if (event.target.id === 'dance-seconds') {
       state.danceSeconds = A.secondsOf(event.target.value);
       const label = $('dance-seconds-label');
@@ -1546,10 +1612,24 @@
     }
   }
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') releasePickIfAbandoned();
+  });
+  window.addEventListener('focus', releasePickIfAbandoned);
+  window.addEventListener('pageshow', releasePickIfAbandoned);
   document.addEventListener('click', onClick);
   document.addEventListener('input', onInput);
   document.addEventListener('change', (event) => {
-    if (event.target.id === 'file-pick') onFiles(event.target.files);
+    if (event.target.id === 'file-pick') {
+      state.pickWaiting = false;
+      const files = event.target.files;
+      if (!files || !files.length) {
+        state.songBusy = false;
+        render();
+        return;
+      }
+      onFiles(files);
+    }
   });
 
   function registerLocalSource() {
