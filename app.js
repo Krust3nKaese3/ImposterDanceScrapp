@@ -85,15 +85,23 @@
     return state.selfDevice || 'local';
   }
 
+  function bindDevice(id) {
+    const next = id || '';
+    if (!next) return;
+    const previous = state.selfDevice || 'local';
+    state.selfDevice = next;
+    if (previous === next) return;
+    Object.keys(state.claims).forEach((key) => {
+      if (state.claims[key] === previous || state.claims[key] === 'local') state.claims[key] = next;
+    });
+    adoptIdentity();
+  }
+
   function adoptIdentity() {
     const device = isGuest() ? state.selfDevice : hostDevice();
     if (!device) return;
     const mine = Object.keys(state.claims).find((id) => state.claims[id] === device);
     if (mine) state.myPid = mine;
-  }
-
-  function hostReady() {
-    return Boolean(state.myPid && state.claims[state.myPid] === hostDevice() && state.seated.some((player) => player.id === state.myPid));
   }
 
   function esc(value) {
@@ -412,7 +420,7 @@
   function rosterModel() {
     const device = hostDevice();
     const hostHere = isHost() && !isGuest();
-    const everyone = state.seated.length >= L.MIN_PLAYERS && state.seated.every((player) => state.claims[player.id]) && hostReady();
+    const everyone = state.seated.length >= L.MIN_PLAYERS && state.seated.every((player) => state.claims[player.id]);
     return {
       query: state.query,
       directory: state.directory.map((player) => ({ id: String(player.id), label: labelOf(player) })),
@@ -1287,7 +1295,7 @@
     const room = await mp.host({ name: 'Host', maxPlayers: 16, discoverable: true, joinApproval: true });
     state.role = 'host';
     state.roomCode = room && room.roomCode || '';
-    state.selfDevice = room && (room.playerId || room.selfId) || state.selfDevice;
+    bindDevice(room && (room.playerId || room.selfId) || state.selfDevice);
     publish();
   }
 
@@ -1311,8 +1319,11 @@
     }
     mp.onPlayersChanged((roster) => {
       if (roster && roster.roomCode) state.roomCode = roster.roomCode;
-      if (roster && roster.selfId) state.selfDevice = roster.selfId;
-      if (isHost() && !isGuest()) publish();
+      if (roster && roster.selfId) bindDevice(roster.selfId);
+      if (isHost() && !isGuest()) {
+        publish();
+        render();
+      }
     });
     mp.onJoinRequest((request) => {
       state.qr.requests = [{ id: request.id, name: request.name }];
@@ -1322,7 +1333,7 @@
     const back = await mp.resume();
     if (back && back.role) {
       state.role = back.role === 'host' ? 'host' : 'guest';
-      state.selfDevice = back.selfId || '';
+      bindDevice(back.selfId || '');
       state.roomCode = back.roomCode || '';
       state.guestHint = state.role === 'guest';
     } else if (bridge() && bridge().guest === true) {
