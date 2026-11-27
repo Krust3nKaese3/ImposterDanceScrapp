@@ -3,6 +3,6 @@
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check players.js && node --check announce.js && node --check audio.js && node --check logic.js && node --check app.js"
+    "check": "node --check players.js && node --check announce.js && node --check audio.js && node --check logic.js && node --check sources.js && node --check app.js"
   }
 }
