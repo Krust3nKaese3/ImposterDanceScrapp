@@ -35,6 +35,9 @@
     audioOn: false,
     guestHint: false,
     clip: null,
+    clipBytes: null,
+    progress: {},
+    binarySent: [],
     nextClip: null,
     clock: L.createClock(),
     offset: 0,
@@ -194,8 +197,7 @@
 
   function readyHtml() {
     const rows = state.match.players.map((player) => {
-      const on = state.match.ready[player.id] ? 'bereit' : 'lädt';
-      return `<div class="choice secondary"><span>${esc(player.name)}</span><span>${on}</span></div>`;
+      return `<div class="choice secondary"><span>${esc(player.name)}</span><span>${esc(loadLabel(player))}</span></div>`;
     }).join('');
     const mine = state.myPid ? state.match.players.find((player) => player.id === state.myPid) : null;
     const unlock = state.audioOn
@@ -208,6 +210,14 @@
       ${namePicker()}
       ${isHost() && !isGuest() ? `<button type="button" class="btn" data-act="play" ${L.allReady(state.match) && state.audioOn ? '' : 'disabled'}>Abspielen</button>` : '<p class="hint">Der Host startet, sobald jede Person geladen hat.</p>'}
     </div>`;
+  }
+
+  function loadLabel(player) {
+    if (state.match.ready[player.id]) return 'bereit';
+    const progress = state.progress[player.id];
+    if (!progress || !progress.total) return 'lädt';
+    const percent = Math.max(0, Math.min(100, Math.round((progress.received / progress.total) * 100)));
+    return 'lädt ' + percent + ' %';
   }
 
   function namePicker() {
@@ -458,6 +468,11 @@
     return announced;
   }
 
+  function bridgeAudio() {
+    const api = bridge();
+    return api && api.audio ? api.audio : null;
+  }
+
   function startSeconds(track, rng) {
     const rate = (track.item && track.item.rate) || A.RATE;
     if (track.random && track.item && track.item.pcm) {
@@ -472,6 +487,17 @@
   }
 
   async function clipBytesFor(track, rng) {
+    const raw = (track.item && track.item.bytes) || track.bytes;
+    const audioApi = bridgeAudio();
+    if (raw && audioApi && typeof audioApi.cut === 'function') {
+      const clip = await audioApi.cut({
+        bytes: raw,
+        startMs: Math.round(startSeconds(track, rng) * 1000),
+        durationMs: A.SECONDS * 1000,
+        targetBytes: A.CLIP_BYTES
+      });
+      return clip.bytes;
+    }
     const source = S.get(track.sourceId || 'local-mp3');
     if (!source) throw new Error('Die Musikquelle fehlt.');
     const produced = await source.getClip(track.item, startSeconds(track, rng), A.SECONDS);
@@ -517,16 +543,33 @@
     render();
   }
 
+  function remoteTargets() {
+    return state.match.players.filter((player) => {
+      const device = state.claims[player.id];
+      return device && device !== state.selfDevice;
+    }).slice().sort((a, b) => String(a.id).localeCompare(String(b.id), 'de'));
+  }
+
   async function distribute(pair) {
     const mp = mpApi();
+    const targets = remoteTargets();
+    if (!mp || !targets.length) return;
+    if (typeof mp.sendBinary === 'function') {
+      for (let i = 0; i < targets.length; i += 1) {
+        const player = targets[i];
+        const bytes = player.id === state.match.imposterId ? pair.imposter : pair.song;
+        const pause = L.binaryWaitMs(state.binarySent, bytes.length, Date.now());
+        if (pause) await wait(pause);
+        await mp.sendBinary({ to: state.claims[player.id], bytes: bytes, id: pair.clipId });
+        state.binarySent.push({ at: Date.now(), n: bytes.length });
+      }
+      return;
+    }
     const jobs = [];
-    state.match.players.forEach((player) => {
-      const device = state.claims[player.id];
-      if (!device || device === state.selfDevice) return;
+    targets.forEach((player) => {
       const bytes = player.id === state.match.imposterId ? pair.imposter : pair.song;
-      A.splitClip(bytes, pair.clipId).forEach((part) => jobs.push({ to: device, data: part }));
+      A.splitClip(bytes, pair.clipId).forEach((part) => jobs.push({ to: state.claims[player.id], data: part }));
     });
-    if (!mp || !jobs.length) return;
     for (let i = 0; i < jobs.length; i += 1) {
       await mp.send(jobs[i].data, { to: jobs[i].to });
       if (i % 6 === 5) await wait(800);
@@ -539,11 +582,31 @@
     acceptClip(state.localPair.clipId, bytes);
   }
 
+  function noteProgress(playerId, progress) {
+    if (!playerId || !progress) return;
+    const received = Number(progress.received) || 0;
+    const total = Number(progress.total) || 0;
+    const prev = state.progress[playerId];
+    state.progress[playerId] = { id: progress.id, received: received, total: total };
+    const before = prev && prev.total ? Math.floor((prev.received / prev.total) * 10) : -1;
+    const after = total ? Math.floor((received / total) * 10) : 0;
+    if (before === after) return;
+    render();
+    if (isHost() && !isGuest()) return;
+    const mp = mpApi();
+    if (mp && mp.send && state.myPid === playerId) {
+      mp.send({ t: 'prog', pid: playerId, id: progress.id, received: received, total: total });
+    }
+  }
+
   function acceptClip(id, bytes) {
     const parsed = A.parseClip(bytes);
     if (!parsed) return;
-    if (id === state.match.clipId) state.clip = parsed;
-    else state.nextClip = { id: id, parsed: parsed };
+    if (id === state.match.clipId) {
+      state.clip = parsed;
+      state.clipBytes = bytes;
+    } else state.nextClip = { id: id, parsed: parsed };
+    if (state.myPid) noteProgress(state.myPid, { id: id, received: 1, total: 1 });
     if (state.myPid && state.audioOn) tellReady();
   }
 
@@ -573,12 +636,22 @@
   }
 
   function schedulePlay(startAt) {
-    const delay = L.scheduleDelay(startAt, isHost() && !isGuest() ? 0 : state.offset, Date.now());
-    const waitMs = Math.max(0, delay);
-    const ctx = audioContext();
-    if (ctx && state.clip) {
-      startBuffer(ctx.currentTime + waitMs / 1000);
+    const offset = isHost() && !isGuest() ? 0 : state.offset;
+    const localAt = L.localStartAt(startAt, offset);
+    const waitMs = Math.max(0, localAt - Date.now());
+    const audioApi = bridgeAudio();
+    if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes) {
+      if (typeof audioApi.stop === 'function') audioApi.stop();
+      audioApi.schedulePlay({
+        bytes: state.clipBytes,
+        startAtMs: localAt,
+        durationMs: A.SECONDS * 1000
+      }).catch((error) => { state.error = errorText(error); });
+      window.setTimeout(finishDance, waitMs + A.SECONDS * 1000);
+      return;
     }
+    const ctx = audioContext();
+    if (ctx && state.clip) startBuffer(ctx.currentTime + waitMs / 1000);
     window.setTimeout(finishDance, waitMs + A.SECONDS * 1000);
   }
 
@@ -731,6 +804,11 @@
       publish();
       return;
     }
+    if (data.t === 'prog' && isHost()) {
+      state.progress[data.pid] = { id: data.id, received: Number(data.received) || 0, total: Number(data.total) || 0 };
+      render();
+      return;
+    }
     if (data.t === 'ready' && isHost()) {
       if (data.id === state.match.clipId) L.markReady(state.match, data.pid);
       publish();
@@ -779,6 +857,19 @@
     const mp = mpApi();
     if (!mp) return;
     mp.onMessage((message) => onNet(message));
+    if (typeof mp.onBinary === 'function') {
+      mp.onBinary((message) => {
+        if (!message) return;
+        acceptClip(message.id, message.bytes);
+        render();
+      });
+    }
+    if (typeof mp.onBinaryProgress === 'function') {
+      mp.onBinaryProgress((progress) => {
+        state.selfProgress = progress;
+        if (state.myPid) noteProgress(state.myPid, progress);
+      });
+    }
     mp.onPlayersChanged((roster) => {
       if (roster && roster.roomCode) state.roomCode = roster.roomCode;
       if (roster && roster.selfId) state.selfDevice = roster.selfId;
@@ -840,6 +931,8 @@
     const mp = mpApi();
     if (mp && mp.send && !(isHost() && !isGuest())) mp.send({ t: 'hear', pid: id });
     else state.claims[id] = state.selfDevice || 'local';
+    if (state.clipBytes) noteProgress(id, { id: state.match.clipId, received: 1, total: 1 });
+    else if (state.selfProgress) noteProgress(id, state.selfProgress);
     deliverLocal();
     render();
   }
@@ -889,7 +982,7 @@
     if (act === 'to-library') { state.screen = 'library'; render(); }
     if (act === 'back-lobby') { state.screen = 'lobby'; state.shell = 'index'; render(); }
     if (act === 'pick') return;
-    if (act === 'pick-file') { const input = $('file-pick'); if (input) input.click(); }
+    if (act === 'pick-file') pickFiles();
     if (act === 'source') {
       state.sourceId = button.dataset.id;
       state.hits = [];
@@ -914,6 +1007,45 @@
       if (track) track.random = !track.random;
       render();
     }
+  }
+
+  async function pickFiles() {
+    const api = bridge();
+    if (api && api.files && typeof api.files.pickAudio === 'function') {
+      state.error = '';
+      try {
+        const picked = await api.files.pickAudio({ accept: ['audio/mpeg', 'audio/mp3', '.mp3'], multiple: true });
+        const canCut = Boolean(bridgeAudio() && typeof bridgeAudio().cut === 'function');
+        for (let i = 0; i < (picked || []).length; i += 1) {
+          const file = picked[i];
+          const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
+          let seconds = (Number(file.durationMs) || 0) / 1000;
+          const item = { id: id, title: file.name, bytes: file.bytes, seconds: seconds };
+          if (!canCut) {
+            const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
+            item.pcm = decoded.item.pcm;
+            item.rate = decoded.item.rate;
+            seconds = decoded.seconds;
+          }
+          state.tracks.push({
+            id: id,
+            name: file.name,
+            sourceId: 'local-mp3',
+            bytes: canCut ? file.bytes : null,
+            item: item,
+            seconds: seconds,
+            start: 0,
+            random: true
+          });
+        }
+      } catch (error) {
+        state.error = errorText(error);
+      }
+      render();
+      return;
+    }
+    const input = $('file-pick');
+    if (input) input.click();
   }
 
   function onInput(event) {
@@ -1019,6 +1151,25 @@
     prepareRound: prepareRound,
     unlockAudio: unlockAudio
   };
+
+  if (window.ImposterAddons) {
+    const api = bridge();
+    window.ImposterAddons.install({
+      bridge: api,
+      target: window,
+      cache: window.__openscrAddonCache,
+      hostInjects: Boolean(api && api.addonsAvailable === true) || !Array.isArray(window.__openscrAddonCache),
+      scrapp: {
+        id: 'imposter-dance',
+        repoUrl: SCRAP_URL,
+        name: 'Imposter Dance',
+        version: '1.0.0'
+      },
+      dispatch: (detail) => {
+        window.dispatchEvent(new CustomEvent('openscr:addon', { detail: detail }));
+      }
+    });
+  }
 
   restoreLobby().then(refreshDirectory).then(() => {
     const pick = document.getElementById('file-pick');

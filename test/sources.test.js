@@ -67,6 +67,18 @@ const wrong = S.ingestAddon({
   register: function () { throw new Error('darf nicht laufen'); }
 });
 assert.strictEqual(wrong.ok, false);
+const repoTarget = S.ingestAddon({
+  manifest: {
+    id: 'repo-ton',
+    version: '0.1.0',
+    targetScrapp: 'Krust3nKaese3/ImposterDanceScrapp',
+    minScrappVersion: '1.0.0',
+    entry: 'addon.js'
+  },
+  register: function (api) { api.registerMusicSource(toneSource('repo-ton')); }
+});
+assert.strictEqual(repoTarget.ok, true);
+assert.ok(S.get('repo-ton'));
 
 const old = S.ingestAddon({
   manifest: {

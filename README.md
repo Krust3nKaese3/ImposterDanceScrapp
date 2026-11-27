@@ -13,7 +13,7 @@ Die Oberfläche ist deutsch. Der Host ist ein Android-Handy mit OpenScr. Weitere
 https://github.com/Krust3nKaese3/ImposterDanceScrapp
 ```
 
-3. Die Berechtigungen **storage** und **multiplayer** bestätigen.
+3. Die Berechtigungen **storage**, **multiplayer** und **http** bestätigen. `http` ist für `net.fetch` in Add-ons.
 
 Dieselbe Seite läuft im Host-WebView und im Browser der Gäste. OpenScr setzt `OpenScrRoster` und `OpenScrQr` ein. Die OpenScrapp nutzt diese gemeinsamen Flächen für die Namensliste und die Einladung.
 
@@ -34,7 +34,7 @@ Dieselbe Seite läuft im Host-WebView und im Browser der Gäste. OpenScr setzt `
 
 Der Host dekodiert die MP3 im WebView und verteilt 16 kHz mono mu-law, genau 160012 Bytes, Ansage und Song gleich lang. Die Ansage ist eine deutsche eSpeak-Aufnahme plus Stille. Bluetooth darf 0,1–0,3 s hinterherhinken. Die Uhren werden wie bei NTP abgeglichen, gespielt wird über die Uhr des AudioContext.
 
-Die Bridge kann weder Dateien lesen noch binär verteilen noch einen Abspielzeitpunkt setzen. Die Grenzen und die vorgeschlagenen Signaturen stehen in [docs/BRIDGE_NEEDS.md](docs/BRIDGE_NEEDS.md).
+Liegen `files.pickAudio`, `audio.cut`, `audio.schedulePlay` und `multiplayer.sendBinary` auf der Bridge, nutzt der Host sie. Sonst bleiben Dateidialog, lokaler Schnitt, JSON-Stücke und die AudioContext-Uhr. Die Ansage entsteht weiter hier. Der Uhrabgleich bleibt Ping/Pong, weil `clock.sync` nur die lokale Uhr ist. Details in [docs/BRIDGE_NEEDS.md](docs/BRIDGE_NEEDS.md). Add-ons: [docs/ADDONS.md](docs/ADDONS.md).
 
 ## Speicher
 
@@ -51,4 +51,4 @@ npm test
 npm run check
 ```
 
-`npm test` prüft Abstimmung, Punktestand, Uhrabgleich, gleiche Clip-Länge, die Ansage, das Zerlegen der Pakete unter 32 KiB und die Musikquellen. `players.js` ist die gemeinsame Spielerliste aus Song raten.
+`npm test` prüft Abstimmung, Punktestand, Uhrabgleich, gleiche Clip-Länge, den MULW-Kopf, das Megabyte-Fenster, die Ansage, das Zerlegen der Pakete unter 32 KiB, die Musikquellen und das Add-on-Format. `players.js` ist die gemeinsame Spielerliste aus Song raten.

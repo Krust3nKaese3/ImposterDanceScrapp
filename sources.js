@@ -50,8 +50,10 @@
   }
 
   function sameTarget(value) {
-    const text = String(value || '').trim().toLowerCase().replace(/\s+/g, '-');
-    return text === SCRAPP_ID || text === 'imposterdance' || text === 'imposter-dance-scrapp';
+    const text = String(value || '').trim().toLowerCase();
+    const dashed = text.replace(/\s+/g, '-');
+    if (dashed === SCRAPP_ID || dashed === 'imposterdance' || dashed === 'imposter-dance-scrapp') return true;
+    return text.endsWith('/imposterdancescrapp');
   }
 
   function publicSource(source) {
@@ -166,7 +168,10 @@
   }
 
   function isPacket(bytes) {
-    return bytes && bytes.length >= 12 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x4e && bytes[3] === 0x31;
+    if (!bytes || bytes.length < 12) return false;
+    const mulaw = bytes[0] === 0x4d && bytes[1] === 0x55 && bytes[2] === 0x4c && bytes[3] === 0x57;
+    const legacy = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x4e && bytes[3] === 0x31;
+    return mulaw || legacy;
   }
 
   function int16FromBytes(bytes) {
