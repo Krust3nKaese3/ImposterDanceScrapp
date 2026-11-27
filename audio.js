@@ -110,16 +110,17 @@
     return Math.floor(roll() * (total - window + 1));
   }
 
-  function buildClip(samples) {
+  function buildClip(samples, durationMs) {
     const audio = encodeMulaw(samples);
     const out = new Uint8Array(HEADER + audio.length);
-    out[0] = 0x49;
-    out[1] = 0x44;
-    out[2] = 0x4e;
-    out[3] = 0x31;
+    out[0] = 0x4d;
+    out[1] = 0x55;
+    out[2] = 0x4c;
+    out[3] = 0x57;
     const view = new DataView(out.buffer);
     view.setUint32(4, RATE, true);
-    view.setUint32(8, audio.length, true);
+    const duration = durationMs == null ? Math.round(audio.length / RATE * 1000) : durationMs;
+    view.setUint32(8, duration, true);
     out.set(audio, HEADER);
     return out;
   }
@@ -140,12 +141,25 @@
 
   function parseClip(bytes) {
     if (!bytes || bytes.length < HEADER) return null;
-    if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x4e || bytes[3] !== 0x31) return null;
+    const mulaw = bytes[0] === 0x4d && bytes[1] === 0x55 && bytes[2] === 0x4c && bytes[3] === 0x57;
+    const legacy = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x4e && bytes[3] === 0x31;
+    if (!mulaw && !legacy) return null;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const rate = view.getUint32(4, true);
-    const count = view.getUint32(8, true);
-    if (count < 0 || HEADER + count > bytes.length) return null;
-    return { rate: rate, samples: decodeMulaw(bytes.subarray(HEADER, HEADER + count)) };
+    const field = view.getUint32(8, true);
+    let count = bytes.length - HEADER;
+    let durationMs = field;
+    if (legacy) {
+      count = field;
+      durationMs = Math.round(count / (rate || RATE) * 1000);
+      if (count < 0 || HEADER + count > bytes.length) return null;
+    }
+    if (count < 0) return null;
+    return {
+      rate: rate,
+      durationMs: durationMs,
+      samples: decodeMulaw(bytes.subarray(HEADER, HEADER + count))
+    };
   }
 
   function rms(samples) {

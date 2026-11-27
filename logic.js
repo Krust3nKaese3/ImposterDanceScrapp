@@ -211,6 +211,34 @@
     return Number(startAt) - Number(offset) - Number(now);
   }
 
+  const BINARY_BUDGET = 1024 * 1024;
+  const BINARY_WINDOW_MS = 10000;
+
+  function localStartAt(hostAt, offsetMs) {
+    return Number(hostAt) - Number(offsetMs || 0);
+  }
+
+  function binaryWaitMs(sent, bytes, now) {
+    const stamp = Number(now) || 0;
+    const need = Number(bytes) || 0;
+    const recent = (sent || []).filter((item) => {
+      if (!item) return false;
+      const age = stamp - Number(item.at);
+      return age >= 0 && age < BINARY_WINDOW_MS;
+    });
+    recent.sort((a, b) => Number(a.at) - Number(b.at));
+    let used = 0;
+    recent.forEach((item) => { used += Number(item.n) || 0; });
+    if (used + need <= BINARY_BUDGET) return 0;
+    let drop = 0;
+    while (drop < recent.length && used + need > BINARY_BUDGET) {
+      used -= Number(recent[drop].n) || 0;
+      drop += 1;
+    }
+    if (!drop) return 0;
+    return Math.max(0, Number(recent[drop - 1].at) + BINARY_WINDOW_MS - stamp);
+  }
+
   function roleFor(match, playerId) {
     if (!match || !match.imposterId) return '';
     return String(playerId) === String(match.imposterId) ? 'imposter' : 'dancer';
@@ -240,6 +268,10 @@
     pushSample: pushSample,
     clockOffset: clockOffset,
     scheduleDelay: scheduleDelay,
+    localStartAt: localStartAt,
+    BINARY_BUDGET: BINARY_BUDGET,
+    BINARY_WINDOW_MS: BINARY_WINDOW_MS,
+    binaryWaitMs: binaryWaitMs,
     roleFor: roleFor
   };
 });

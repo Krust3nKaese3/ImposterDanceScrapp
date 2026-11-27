@@ -86,6 +86,20 @@ L.pushSample(clock, 5, 8);
 L.pushSample(clock, 9, 12);
 assert.strictEqual(L.clockOffset(clock), 5);
 assert.strictEqual(L.scheduleDelay(10_000, 5, 9_000), 995);
+assert.strictEqual(L.localStartAt(10_000, 5), 9995);
+assert.strictEqual(L.localStartAt(10_000, 0), 10_000);
+
+const clipBytes = 160012;
+const sent = [];
+let at = 0;
+for (let i = 0; i < 6; i += 1) {
+  assert.strictEqual(L.binaryWaitMs(sent, clipBytes, at), 0);
+  sent.push({ at: at, n: clipBytes });
+  at += 10;
+}
+const waitSeventh = L.binaryWaitMs(sent, clipBytes, at);
+assert.ok(waitSeventh > 9000 && waitSeventh <= 10000);
+assert.strictEqual(L.binaryWaitMs(sent, clipBytes, sent[0].at + L.BINARY_WINDOW_MS), 0);
 
 const tone = new Int16Array(A.RATE);
 for (let i = 0; i < tone.length; i += 1) tone[i] = Math.round(Math.sin(i / 8) * 8000);
@@ -93,6 +107,18 @@ const song = A.clipFromPcm(tone, A.RATE, 0);
 const imposter = A.imposterFromAnnouncement(A.b64ToBytes(AN.b64));
 assert.strictEqual(song.length, A.CLIP_BYTES);
 assert.strictEqual(imposter.length, song.length);
+assert.strictEqual(song[0], 0x4d);
+assert.strictEqual(song[1], 0x55);
+assert.strictEqual(song[2], 0x4c);
+assert.strictEqual(song[3], 0x57);
+assert.strictEqual(new DataView(song.buffer, song.byteOffset, song.byteLength).getUint32(8, true), 10000);
+const legacy = new Uint8Array(song);
+legacy[0] = 0x49;
+legacy[1] = 0x44;
+legacy[2] = 0x4e;
+legacy[3] = 0x31;
+new DataView(legacy.buffer).setUint32(8, A.SAMPLES, true);
+assert.strictEqual(A.parseClip(legacy).samples.length, A.SAMPLES);
 const parsedSong = A.parseClip(song);
 const parsedImposter = A.parseClip(imposter);
 assert.ok(A.rms(parsedSong.samples) > 100);
