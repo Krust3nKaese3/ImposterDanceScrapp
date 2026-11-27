@@ -22,7 +22,7 @@ Dieselbe Seite läuft im Host-WebView und im Browser der Gäste. OpenScr setzt `
 1. Namen aus der gemeinsamen Spielerliste setzen. Mindestens drei.
 2. **Einladen** öffnet die QR-Seite von OpenScr (WLAN oder Hotspot).
 3. Jede Person wählt auf dem eigenen Handy, wer sie ist.
-4. Der Host wählt eine oder mehrere MP3-Dateien vom eigenen Handy. Pro Datei gilt ein fester Start oder ein zufälliger Start im Stück.
+4. Der Host wählt eine oder mehrere MP3-Dateien vom eigenen Handy. Pro Datei gilt ein fester Start oder ein zufälliger Start im Stück. Weitere Musikquellen können als OpenScr-Add-on dazukommen, siehe [docs/ADDONS.md](docs/ADDONS.md).
 5. **Runde vorbereiten** schneidet 10 Sekunden, baut die Imposter-Ansage auf dieselbe Größe und schickt das Paket vollständig an die anderen Handys. Es wird nichts gestreamt.
 6. Jede Person tippt **Bereit**. Das gibt den Ton frei und fordert einen Wake Lock an. Solange jemand noch lädt, bleibt **Abspielen** aus.
 7. Zur verabredeten Host-Zeit starten alle. Nach 10 Sekunden endet der Ton.
@@ -51,4 +51,4 @@ npm test
 npm run check
 ```
 
-`npm test` prüft Abstimmung, Punktestand, Uhrabgleich, gleiche Clip-Länge, die Ansage und das Zerlegen der Pakete unter 32 KiB. `players.js` ist die gemeinsame Spielerliste aus Song raten.
+`npm test` prüft Abstimmung, Punktestand, Uhrabgleich, gleiche Clip-Länge, die Ansage, das Zerlegen der Pakete unter 32 KiB und die Musikquellen. `players.js` ist die gemeinsame Spielerliste aus Song raten.
