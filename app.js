@@ -767,7 +767,8 @@
           durationMs: danceSeconds() * 1000,
           targetBytes: A.clipBytesFor(danceSeconds())
         });
-        if (clip && clip.bytes) return clip.bytes;
+        const parsed = clip && A.parseClip(clip.bytes);
+        if (parsed && parsed.rate === A.RATE && clip.bytes.length === A.clipBytesFor(danceSeconds())) return clip.bytes;
       } catch (error) {
         /* Hermes liefert buildClip nur als Bytecode, die WebView kann den Schnitt dann nicht ausführen. */
       }
@@ -1012,7 +1013,8 @@
     const gen = playGen;
     const audioApi = bridgeAudio();
     window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
-    if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes) {
+    const bridgeKnowsRate = state.clip && state.clip.rate === 16000;
+    if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes && bridgeKnowsRate) {
       if (typeof audioApi.stop === 'function') audioApi.stop();
       let pending;
       try {
@@ -1487,23 +1489,20 @@
       render();
       try {
         const picked = await api.files.pickAudio({ accept: ['audio/mpeg', 'audio/mp3', '.mp3'], multiple: true });
-        const canCut = Boolean(bridgeAudio() && typeof bridgeAudio().cut === 'function');
         for (let i = 0; i < (picked || []).length; i += 1) {
           const file = picked[i];
           const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
           let seconds = (Number(file.durationMs) || 0) / 1000;
           const item = { id: id, title: file.name, bytes: file.bytes, seconds: seconds };
-          if (!canCut) {
-            const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
-            item.pcm = decoded.item.pcm;
-            item.rate = decoded.item.rate;
-            seconds = decoded.seconds;
-          }
+          const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
+          item.pcm = decoded.item.pcm;
+          item.rate = decoded.item.rate;
+          seconds = decoded.seconds;
           state.tracks.push({
             id: id,
             name: file.name,
             sourceId: 'local-mp3',
-            bytes: canCut ? file.bytes : null,
+            bytes: null,
             item: item,
             seconds: seconds,
             start: 0,

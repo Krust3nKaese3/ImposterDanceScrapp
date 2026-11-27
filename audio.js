@@ -1,5 +1,5 @@
 /*
- * 10-Sekunden-Clips gleicher Länge: 16 kHz mono mu-law.
+ * Clips gleicher Länge: 24 kHz mono mu-law.
  * Der Host dekodiert die MP3 lokal. Verteilt wird nur dieses Paket,
  * damit die Dateigröße die Rolle nicht verrät.
  */
@@ -10,7 +10,8 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const RATE = 16000;
+  const RATE = 24000;
+  const ANNOUNCE_RATE = 16000;
   const SECONDS = 10;
   const SAMPLES = RATE * SECONDS;
   const HEADER = 12;
@@ -143,7 +144,7 @@
   }
 
   function imposterFromAnnouncement(announceMulaw, seconds) {
-    const spoken = decodeMulaw(announceMulaw);
+    const spoken = resampleLinear(decodeMulaw(announceMulaw), ANNOUNCE_RATE, RATE);
     const count = sampleCount(seconds);
     const samples = new Int16Array(count);
     const n = Math.min(spoken.length, count);

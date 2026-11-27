@@ -133,7 +133,13 @@ assert.strictEqual(one[0].id, 'c1');
 const splitBin = A.binaryParts(longClip, 'c1');
 assert.strictEqual(splitBin.length, 2);
 splitBin.forEach((part) => assert.ok(/^[A-Za-z0-9_-]+$/.test(part.id) && part.id.length <= 32));
-splitBin.forEach((part) => assert.ok(part.bytes.length <= A.BINARY_MAX));
+splitBin.forEach((part) => {
+  assert.ok(part.bytes.length <= A.BINARY_MAX);
+  assert.ok(Math.ceil(part.bytes.length / 3) * 4 <= 360000);
+});
+const thirty = A.clipBytesFor(30);
+assert.ok(thirty === 30 * A.RATE + 12);
+assert.ok(A.binaryParts(new Uint8Array(thirty), 'c1').every((part) => /^[A-Za-z0-9_-]{1,32}$/.test(part.id)));
 const binAsm = A.createAssembler();
 assert.strictEqual(A.takeBinaryPart(binAsm, splitBin[1]), null);
 const joined = A.takeBinaryPart(binAsm, splitBin[0]);
