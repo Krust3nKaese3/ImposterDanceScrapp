@@ -930,6 +930,18 @@
     return danceSeconds() * 1000;
   }
 
+  function playInPage(localAt, durationMs) {
+    const ctx = audioContext();
+    if (!ctx || !state.clip) return false;
+    const arm = () => {
+      const left = Math.max(0, localAt - Date.now());
+      startBuffer(ctx.currentTime + left / 1000, durationMs / 1000);
+    };
+    if (ctx.resume) ctx.resume().then(arm).catch(arm);
+    else arm();
+    return true;
+  }
+
   function schedulePlay(startAt) {
     const offset = isHost() && !isGuest() ? 0 : state.offset;
     const localAt = L.localStartAt(startAt, offset);
@@ -937,19 +949,30 @@
     const durationMs = playMs();
     const gen = playGen;
     const audioApi = bridgeAudio();
+    window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
     if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes) {
       if (typeof audioApi.stop === 'function') audioApi.stop();
-      audioApi.schedulePlay({
-        bytes: state.clipBytes,
-        startAtMs: localAt,
-        durationMs: durationMs
-      }).catch((error) => { state.error = errorText(error); });
-      window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
+      let pending;
+      try {
+        pending = audioApi.schedulePlay({
+          bytes: state.clipBytes,
+          startAtMs: localAt,
+          durationMs: durationMs
+        });
+      } catch (error) {
+        if (!playInPage(localAt, durationMs)) state.error = errorText(error);
+        return;
+      }
+      if (pending && typeof pending.catch === 'function') {
+        pending.catch((error) => {
+          if (playInPage(localAt, durationMs)) return;
+          state.error = errorText(error);
+          render();
+        });
+      }
       return;
     }
-    const ctx = audioContext();
-    if (ctx && state.clip) startBuffer(ctx.currentTime + waitMs / 1000, durationMs / 1000);
-    window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
+    playInPage(localAt, durationMs);
   }
 
   function startBuffer(when, seconds) {
