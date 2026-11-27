@@ -207,16 +207,22 @@
     return S.get(state.sourceId) || S.get('local-mp3') || null;
   }
 
+  function trackRow(track) {
+    const max = Math.max(0, (track.seconds || 0) - danceSeconds());
+    return `<div class="track"><strong>${esc(track.name)}</strong>
+      <label>Start bei ${track.start.toFixed(1)} s
+        <input type="range" min="0" max="${max.toFixed(2)}" step="0.1" value="${track.start}" data-act="start-at" data-id="${esc(track.id)}" ${track.random ? 'disabled' : ''}>
+      </label>
+      <button type="button" class="btn ghost" data-act="toggle-random" data-id="${esc(track.id)}">${track.random ? 'Zufälliger Start: an' : 'Zufälliger Start: aus'}</button>
+    </div>`;
+  }
+
   function trackRows() {
-    return state.tracks.map((track) => {
-      const max = Math.max(0, (track.seconds || 0) - danceSeconds());
-      return `<div class="track"><strong>${esc(track.name)}</strong>
-        <label>Start bei ${track.start.toFixed(1)} s
-          <input type="range" min="0" max="${max.toFixed(2)}" step="0.1" value="${track.start}" data-act="start-at" data-id="${esc(track.id)}" ${track.random ? 'disabled' : ''}>
-        </label>
-        <button type="button" class="btn ghost" data-act="toggle-random" data-id="${esc(track.id)}">${track.random ? 'Zufälliger Start: an' : 'Zufälliger Start: aus'}</button>
-      </div>`;
-    }).join('');
+    return state.tracks.map(trackRow).join('');
+  }
+
+  function sourceTracks() {
+    return state.tracks.filter((track) => track.sourceId === state.sourceId);
   }
 
   function hitChosen(hit) {
@@ -247,6 +253,7 @@
     }
     const source = activeSource();
     const files = !source || source.ui === 'files';
+    const picked = sourceTracks().slice(-1)[0];
     const body = files
       ? `<section class="card stack">
         <h2>Songs vom Host-Handy</h2>
@@ -263,7 +270,7 @@
           <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
         </div>
         <div class="hitlist" role="list">${hitButtons()}</div>
-        ${trackRows() || '<p class="hint">Noch nichts für die Runde gewählt.</p>'}
+        ${picked ? trackRow(picked) : '<p class="hint">Noch nichts für die Runde gewählt.</p>'}
       </section>`;
     return `${header()}<div class="stack">${banners()}
       ${body}
@@ -1543,7 +1550,8 @@
     const hit = state.hits.find((item) => String(item.id) === String(id));
     if (!hit) return;
     const seconds = Number(hit.seconds || hit.duration || 0);
-    state.tracks.push({
+    const previous = sourceTracks().find((track) => track.item && String(track.item.id) === String(hit.id));
+    const next = previous || {
       id: 'q_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36),
       name: hit.title || hit.name || 'Titel',
       sourceId: state.sourceId,
@@ -1551,7 +1559,9 @@
       seconds: seconds,
       start: 0,
       random: seconds > danceSeconds()
-    });
+    };
+    state.tracks = state.tracks.filter((track) => track.sourceId !== state.sourceId);
+    state.tracks.push(next);
     state.info = '';
     render();
   }
