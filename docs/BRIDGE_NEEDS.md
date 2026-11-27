@@ -14,6 +14,8 @@ Imposter Dance nutzt die neutralen Methoden aus OpenScr, sobald sie auf `OpenScr
 
 `audio.cut` und die eigene Ansage schreiben 16 kHz mono mu-law mit Kopf `MULW`, Abtastrate und Dauer in Millisekunden. 10 Sekunden sind 160012 Bytes. Die Ansage entsteht weiter in dieser OpenScrapp. `audio.speak` gibt es nicht.
 
+`songHistory.add({ title, artist? })`, `list({ source?, excludeSelf?, sinceMs? })`, `sources()` und `clear()` teilen die letzten 24 Stunden auf dem Gerät. Fehlt `songHistory` (älteres OpenScr, Browser-Gast), schreibt Imposter Dance nichts und zeigt keinen Knopf. Einträge anderer OpenScrapps erscheinen neben dem Suchfeld, sobald `list({ excludeSelf: true })` Titel liefert. Die Beschriftung kommt aus `sources()`, zum Beispiel „Songs aus Song raten“. Ohne Anzeigename steht „Heute schon gespielt“.
+
 `sendBinary` nimmt bis 256 KiB. Die Bridge stückelt mit 12000 Bytes. Zusätzlich gelten 1 MiB Binärdaten in 10 Sekunden und 80 Nachrichten in 10 Sekunden. Der Host schickt gezielt an jedes andere Gerät, immer die gleiche Länge, in fester Namensreihenfolge, und wartet nur, wenn das Megabyte-Fenster voll ist. Der Ladefortschritt steht in der Bereit-Anzeige.
 
 ## Uhr

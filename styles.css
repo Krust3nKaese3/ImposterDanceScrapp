@@ -48,6 +48,9 @@ h2 { font-size: 20px; margin: 0; }
 .chip { background: #1c1c22; border-radius: 999px; min-height: 36px; padding: 8px 12px; }
 .row { display: flex; gap: 8px; }
 .row .btn { flex: 1; }
+.searchline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.searchline input[type="text"] { flex: 1 1 160px; width: auto; }
+.searchline .btn { flex: 0 1 auto; }
 input[type="text"], input[type="range"], input[type="file"] { width: 100%; }
 input[type="text"] {
   min-height: 52px;
