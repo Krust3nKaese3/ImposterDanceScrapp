@@ -201,13 +201,13 @@
     return { samples: int16FromBytes(bytes), rate: audio.RATE };
   }
 
-  function toClipBytes(produced, audio) {
+  function toClipBytes(produced, audio, seconds) {
     if (!audio || typeof audio.clipFromPcm !== 'function') throw new Error('Audio fehlt.');
     const bytes = asBytes(produced);
     if (bytes && isPacket(bytes)) return bytes;
     const pcm = pcmFromProduced(produced, audio);
     if (!pcm || !pcm.samples) throw new Error('Der Ausschnitt ist kein Ton.');
-    return audio.clipFromPcm(pcm.samples, pcm.rate, 0);
+    return audio.clipFromPcm(pcm.samples, pcm.rate, 0, seconds);
   }
 
   return {

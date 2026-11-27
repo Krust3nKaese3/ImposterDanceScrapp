@@ -43,8 +43,13 @@
     offset: 0,
     playSource: null,
     qr: { open: '', hostLink: 'wlan', ssid: '', pass: '', note: '', image: '', share: '', copied: false, requests: [] },
-    busy: false
+    busy: false,
+    danceSeconds: A.SECONDS
   };
+
+  function danceSeconds() {
+    return A.secondsOf(state.danceSeconds);
+  }
 
   const assembler = A.createAssembler();
   let announced = null;
@@ -81,10 +86,30 @@
 
   function $(id) { return document.getElementById(id); }
 
+  function inOpenScr() {
+    return Boolean(window.ReactNativeWebView && window.ReactNativeWebView.postMessage);
+  }
+
+  function postShell(page) {
+    state.shell = page;
+    if (!inOpenScr()) return;
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'shell-page', page: page }));
+  }
+
+  function applyShell(page) {
+    const next = page === 'qr' || page === 'options' ? page : 'index';
+    if (next === state.shell) return;
+    postShell(next);
+    if (next === 'qr') state.qr.open = '';
+    render();
+  }
+
   function render() {
     const root = $('app');
     if (!root) return;
-    root.innerHTML = state.shell === 'qr' ? qrHtml() : screenHtml();
+    if (state.shell === 'qr') root.innerHTML = qrHtml();
+    else if (state.shell === 'options') root.innerHTML = optionsHtml();
+    else root.innerHTML = screenHtml();
     mountShared();
   }
 
@@ -151,7 +176,7 @@
 
   function trackRows() {
     return state.tracks.map((track) => {
-      const max = Math.max(0, (track.seconds || 0) - A.SECONDS);
+      const max = Math.max(0, (track.seconds || 0) - danceSeconds());
       return `<div class="track"><strong>${esc(track.name)}</strong>
         <label>Start bei ${track.start.toFixed(1)} s
           <input type="range" min="0" max="${max.toFixed(2)}" step="0.1" value="${track.start}" data-act="start-at" data-id="${esc(track.id)}" ${track.random ? 'disabled' : ''}>
@@ -174,14 +199,14 @@
     const body = files
       ? `<section class="card stack">
         <h2>Songs vom Host-Handy</h2>
-        <p class="hint">MP3 auswählen. Daraus wird vor dem Start ein 10-Sekunden-Schnipsel von etwa 160 KB. Es geht komplett über das WLAN, nichts wird gestreamt.</p>
+        <p class="hint">MP3 auswählen. Daraus wird vor dem Start ein ${danceSeconds()}-Sekunden-Schnipsel. Es geht komplett über das WLAN, nichts wird gestreamt.</p>
         <button type="button" class="btn secondary" data-act="pick-file">MP3 wählen</button>
         <input id="file-pick" type="file" accept="audio/mpeg,audio/mp3,.mp3" multiple hidden>
         ${trackRows() || '<p class="hint">Noch keine Datei.</p>'}
       </section>`
       : `<section class="card stack">
         <h2>${esc(source.name)}</h2>
-        <p class="hint">Suche einen Titel. Der Host holt daraus 10 Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>
+        <p class="hint">Suche einen Titel. Der Host holt daraus ${danceSeconds()} Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>
         <input id="source-query" type="text" maxlength="80" placeholder="Suchen" aria-label="Musik suchen" value="${esc(state.sourceQuery)}">
         <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
         ${state.hits.map((hit) => `<button type="button" class="choice" data-act="add-hit" data-id="${esc(hit.id)}">${esc(hit.title || hit.name || hit.id)}</button>`).join('') || '<p class="hint">Noch keine Treffer.</p>'}
@@ -226,7 +251,7 @@
 
   function danceHtml() {
     return `${header()}<div class="stack">${banners()}
-      <section class="card dance" aria-live="polite"><div>♫</div><p class="hint">10 Sekunden. Danach wird abgestimmt.</p></section>
+      <section class="card dance" aria-live="polite"><div>♫</div><p class="hint">${danceSeconds()} Sekunden. Danach wird abgestimmt.</p></section>
     </div>`;
   }
 
@@ -272,8 +297,18 @@
   }
 
   function qrHtml() {
-    return `${header()}<div class="stack">${banners()}<div id="openscr-qr"></div>
-      <button type="button" class="btn ghost" data-act="close-qr">Zurück zum Spiel</button></div>`;
+    return `${header()}<div class="stack"><div id="openscr-qr"></div></div>`;
+  }
+
+  function optionsHtml() {
+    return `${header()}<div class="stack">${banners()}
+      <h2>Optionen</h2>
+      <section class="card stack">
+        <label class="field-label" for="dance-seconds">Tanzdauer: <span id="dance-seconds-label">${danceSeconds()} Sekunden</span></label>
+        <input id="dance-seconds" type="range" min="3" max="30" step="1" value="${danceSeconds()}" aria-label="Tanzdauer in Sekunden" ${isHost() && !isGuest() ? '' : 'disabled'}>
+        <p class="hint">So lange läuft der Schnipsel. Der Imposter hört nur die Ansage und danach Stille. Voreinstellung ist 10 Sekunden.</p>
+      </section>
+    </div>`;
   }
 
   function rosterModel() {
@@ -285,7 +320,7 @@
       startDisabled: state.seated.length < L.MIN_PLAYERS || isGuest(),
       statsLabel: 'Mitspieler',
       canRemove: !isGuest(),
-      rulesHtml: '<p>Dieselbe Stelle, zehn Sekunden, eigene Kopfhörer. Eine Person hört nur „Du bist der Imposter“ und danach Stille. Danach stimmt ihr ab.</p>'
+      rulesHtml: '<p>Dieselbe Stelle, ' + danceSeconds() + ' Sekunden, eigene Kopfhörer. Eine Person hört nur „Du bist der Imposter“ und danach Stille. Danach stimmt ihr ab.</p>'
     };
   }
 
@@ -316,7 +351,7 @@
         onHotspotShow: (draft) => { state.qr.ssid = draft.ssid; state.qr.pass = draft.pass; paintHostQr(); },
         onCopy: () => { copyText(state.qr.share); state.qr.copied = true; pushQr(); },
         onShare: () => { if (navigator.share && state.qr.share) navigator.share({ title: 'Imposter Dance', url: state.qr.share }).catch(() => {}); },
-        onStop: () => { const mp = mpApi(); if (mp && mp.endRoom) mp.endRoom(); state.role = 'solo'; state.shell = 'index'; render(); },
+        onStop: () => { const mp = mpApi(); if (mp && mp.endRoom) mp.endRoom(); state.role = 'solo'; postShell('index'); render(); },
         onApprove: (id) => { const mp = mpApi(); if (mp && mp.approveJoin) mp.approveJoin(id); },
         onDeny: (id) => { const mp = mpApi(); if (mp && mp.denyJoin) mp.denyJoin(id); }
       });
@@ -341,7 +376,14 @@
 
   async function paintHostQr() {
     state.qr.open = 'host';
-    await ensureHost();
+    try {
+      await ensureHost();
+    } catch (error) {
+      state.qr.note = errorText(error);
+      state.qr.image = '';
+      render();
+      return;
+    }
     const mp = mpApi();
     if (state.qr.hostLink === 'wlan' && mp && mp.showWifiQr) {
       try { await mp.showWifiQr(); state.qr.note = 'Stellt sicher, dass ihr im selben WLAN seid.'; } catch (error) { state.qr.note = errorText(error); }
@@ -476,12 +518,12 @@
   function startSeconds(track, rng) {
     const rate = (track.item && track.item.rate) || A.RATE;
     if (track.random && track.item && track.item.pcm) {
-      const windowSamples = Math.round(A.SECONDS * rate);
+      const windowSamples = Math.round(danceSeconds() * rate);
       return A.randomStart(track.item.pcm.length, windowSamples, rng) / rate;
     }
-    if (track.random && track.seconds > A.SECONDS) {
+    if (track.random && track.seconds > danceSeconds()) {
       const roll = typeof rng === 'function' ? rng() : Math.random();
-      return roll * (track.seconds - A.SECONDS);
+      return roll * (track.seconds - danceSeconds());
     }
     return track.start || 0;
   }
@@ -493,22 +535,22 @@
       const clip = await audioApi.cut({
         bytes: raw,
         startMs: Math.round(startSeconds(track, rng) * 1000),
-        durationMs: A.SECONDS * 1000,
-        targetBytes: A.CLIP_BYTES
+        durationMs: danceSeconds() * 1000,
+        targetBytes: A.clipBytesFor(danceSeconds())
       });
       return clip.bytes;
     }
     const source = S.get(track.sourceId || 'local-mp3');
     if (!source) throw new Error('Die Musikquelle fehlt.');
-    const produced = await source.getClip(track.item, startSeconds(track, rng), A.SECONDS);
-    return S.toClipBytes(produced, A);
+    const produced = await source.getClip(track.item, startSeconds(track, rng), danceSeconds());
+    return S.toClipBytes(produced, A, danceSeconds());
   }
 
   async function cutPair(rng) {
     if (!state.tracks.length) throw new Error('Zuerst eine Musik wählen.');
     const track = state.tracks[state.match.round % state.tracks.length];
     const song = await clipBytesFor(track, rng);
-    const imposter = A.imposterFromAnnouncement(announcementBytes());
+    const imposter = A.imposterFromAnnouncement(announcementBytes(), danceSeconds());
     if (song.length !== imposter.length) throw new Error('Die beiden Clips sind nicht gleich lang.');
     return { song: song, imposter: imposter, clipId: 'c' + (state.match.round || 1) };
   }
@@ -635,27 +677,33 @@
     render();
   }
 
+  function playMs() {
+    if (state.clip && state.clip.durationMs) return state.clip.durationMs;
+    return danceSeconds() * 1000;
+  }
+
   function schedulePlay(startAt) {
     const offset = isHost() && !isGuest() ? 0 : state.offset;
     const localAt = L.localStartAt(startAt, offset);
     const waitMs = Math.max(0, localAt - Date.now());
+    const durationMs = playMs();
     const audioApi = bridgeAudio();
     if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes) {
       if (typeof audioApi.stop === 'function') audioApi.stop();
       audioApi.schedulePlay({
         bytes: state.clipBytes,
         startAtMs: localAt,
-        durationMs: A.SECONDS * 1000
+        durationMs: durationMs
       }).catch((error) => { state.error = errorText(error); });
-      window.setTimeout(finishDance, waitMs + A.SECONDS * 1000);
+      window.setTimeout(finishDance, waitMs + durationMs);
       return;
     }
     const ctx = audioContext();
-    if (ctx && state.clip) startBuffer(ctx.currentTime + waitMs / 1000);
-    window.setTimeout(finishDance, waitMs + A.SECONDS * 1000);
+    if (ctx && state.clip) startBuffer(ctx.currentTime + waitMs / 1000, durationMs / 1000);
+    window.setTimeout(finishDance, waitMs + durationMs);
   }
 
-  function startBuffer(when) {
+  function startBuffer(when, seconds) {
     if (!state.clip) return;
     const ctx = audioContext();
     if (!ctx) return;
@@ -666,7 +714,7 @@
     source.buffer = buffer;
     source.connect(ctx.destination);
     source.start(when);
-    source.stop(when + A.SECONDS);
+    source.stop(when + (seconds || danceSeconds()));
     state.playSource = source;
   }
 
@@ -938,7 +986,7 @@
   }
 
   async function persistLobby() {
-    const payload = JSON.stringify({ v: 1, seated: state.seated });
+    const payload = JSON.stringify({ v: 1, seated: state.seated, danceSeconds: danceSeconds() });
     const api = bridge();
     if (api && api.storage && api.storage.set) {
       try { await api.storage.set(LOBBY_KEY, payload); } catch (error) { state.error = errorText(error); }
@@ -953,6 +1001,7 @@
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.seated)) state.seated = parsed.seated;
+      if (parsed && parsed.danceSeconds != null) state.danceSeconds = A.secondsOf(parsed.danceSeconds);
     } catch (error) { /* leere Lobby ist in Ordnung */ }
   }
 
@@ -980,7 +1029,7 @@
     if (act === 'cancel-person') { state.creating = false; render(); }
     if (act === 'save-person') addPerson(($('draft-name') || {}).value, ($('draft-tag') || {}).value);
     if (act === 'to-library') { state.screen = 'library'; render(); }
-    if (act === 'back-lobby') { state.screen = 'lobby'; state.shell = 'index'; render(); }
+    if (act === 'back-lobby') { state.screen = 'lobby'; postShell('index'); render(); }
     if (act === 'pick') return;
     if (act === 'pick-file') pickFiles();
     if (act === 'source') {
@@ -1000,8 +1049,8 @@
     if (act === 'vote-back') sendVote('back', { pid: state.pendingClaim });
     if (act === 'suspect') sendVote('cast', { pid: state.pendingClaim, suspect: button.dataset.id });
     if (act === 'next') prepareRound();
-    if (act === 'qr') { state.shell = 'qr'; state.qr.open = ''; render(); }
-    if (act === 'close-qr') { state.shell = 'index'; render(); }
+    if (act === 'qr') applyShell('qr');
+    if (act === 'close-qr') applyShell('index');
     if (act === 'toggle-random') {
       const track = state.tracks.find((item) => item.id === button.dataset.id);
       if (track) track.random = !track.random;
@@ -1059,6 +1108,12 @@
       }
     }
     if (event.target.id === 'source-query') state.sourceQuery = event.target.value;
+    if (event.target.id === 'dance-seconds') {
+      state.danceSeconds = A.secondsOf(event.target.value);
+      const label = $('dance-seconds-label');
+      if (label) label.textContent = danceSeconds() + ' Sekunden';
+      persistLobby();
+    }
     if (event.target.dataset && event.target.dataset.act === 'start-at') {
       const track = state.tracks.find((item) => item.id === event.target.dataset.id);
       if (track) track.start = Number(event.target.value) || 0;
@@ -1130,7 +1185,7 @@
       item: hit,
       seconds: seconds,
       start: 0,
-      random: seconds > A.SECONDS
+      random: seconds > danceSeconds()
     });
     state.info = '';
     render();
@@ -1170,6 +1225,8 @@
       }
     });
   }
+
+  window.addEventListener('openscr-shell', (event) => applyShell(event.detail));
 
   restoreLobby().then(refreshDirectory).then(() => {
     const pick = document.getElementById('file-pick');

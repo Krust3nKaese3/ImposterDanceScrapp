@@ -125,16 +125,27 @@
     return out;
   }
 
-  function clipFromPcm(samples, fromRate, startSample) {
-    const resampled = resampleLinear(samples, fromRate, RATE);
-    const start = Math.round((startSample || 0) * RATE / fromRate);
-    return buildClip(takeWindow(resampled, start, SAMPLES));
+  function secondsOf(seconds) {
+    const n = seconds == null ? SECONDS : Number(seconds);
+    if (!Number.isFinite(n)) return SECONDS;
+    return Math.max(3, Math.min(30, Math.round(n)));
   }
 
-  function imposterFromAnnouncement(announceMulaw) {
+  function sampleCount(seconds) {
+    return RATE * secondsOf(seconds);
+  }
+
+  function clipFromPcm(samples, fromRate, startSample, seconds) {
+    const resampled = resampleLinear(samples, fromRate, RATE);
+    const start = Math.round((startSample || 0) * RATE / fromRate);
+    return buildClip(takeWindow(resampled, start, sampleCount(seconds)));
+  }
+
+  function imposterFromAnnouncement(announceMulaw, seconds) {
     const spoken = decodeMulaw(announceMulaw);
-    const samples = new Int16Array(SAMPLES);
-    const n = Math.min(spoken.length, SAMPLES);
+    const count = sampleCount(seconds);
+    const samples = new Int16Array(count);
+    const n = Math.min(spoken.length, count);
     samples.set(spoken.subarray(0, n), 0);
     return buildClip(samples);
   }
@@ -282,6 +293,9 @@
     takeWindow: takeWindow,
     randomStart: randomStart,
     buildClip: buildClip,
+    secondsOf: secondsOf,
+    sampleCount: sampleCount,
+    clipBytesFor: function (seconds) { return HEADER + sampleCount(seconds); },
     clipFromPcm: clipFromPcm,
     imposterFromAnnouncement: imposterFromAnnouncement,
     parseClip: parseClip,
