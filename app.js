@@ -46,6 +46,8 @@
     playSource: null,
     qr: { open: '', hostLink: 'wlan', ssid: '', pass: '', note: '', image: '', share: '', copied: false, requests: [] },
     busy: false,
+    songBusy: false,
+    playBusy: false,
     danceSeconds: A.SECONDS
   };
 
@@ -138,8 +140,15 @@
     else if (state.screen === 'dance') html = danceHtml();
     else if (state.screen === 'vote') html = voteHtml();
     else if (state.screen === 'reveal') html = revealHtml();
-    if (state.screen === 'lobby' || !(isHost() && !isGuest())) return html;
-    return html.replace(/<\/div>\s*$/, abortButton() + '</div>');
+    if (!(isHost() && !isGuest())) return html;
+    const hasSongAction = state.screen === 'lobby' || state.screen === 'library' || state.screen === 'reveal';
+    const tools = (hasSongAction ? '' : forceSongButton()) + (state.screen === 'lobby' ? '' : abortButton());
+    if (!tools) return html;
+    return html.replace(/<\/div>\s*$/, tools + '</div>');
+  }
+
+  function forceSongButton() {
+    return '<button type="button" class="btn" data-act="force-song">Nächsten Song erzwingen</button>';
   }
 
   function abortButton() {
@@ -217,6 +226,12 @@
   }
 
   function libraryHtml() {
+    if (isGuest()) {
+      return `${header()}<div class="stack">${banners()}
+        <h2>Nächster Song</h2>
+        <p class="hint">Der Host wählt den nächsten Song.</p>
+      </div>`;
+    }
     const source = activeSource();
     const files = !source || source.ui === 'files';
     const body = files
@@ -237,22 +252,44 @@
       </section>`;
     return `${header()}<div class="stack">${banners()}
       ${body}
-      <button type="button" class="btn" data-act="prepare" ${!state.tracks.length || state.busy ? 'disabled' : ''}>Abspielen</button>
+      ${playControl()}
       <button type="button" class="btn ghost" data-act="back-lobby">Zurück</button>
       ${sourceBar()}
     </div>`;
   }
 
+  function playControl() {
+    if (state.songBusy || state.playBusy) return '<div class="wait" aria-live="polite"><span class="spin" aria-hidden="true"></span></div>';
+    return `<button type="button" class="btn" data-act="prepare" ${state.tracks.length ? '' : 'disabled'}>Abspielen</button>`;
+  }
+
   function readyHtml() {
-    const rows = state.match.players.map((player) => {
-      return `<div class="choice secondary"><span>${esc(player.name)}</span><span>${esc(loadLabel(player))}</span></div>`;
-    }).join('');
-    const mine = state.myPid ? state.match.players.find((player) => player.id === state.myPid) : null;
     return `${header()}<div class="stack">${banners()}
-      <div class="wait"><span class="spin" aria-hidden="true"></span><p class="hint">Warten, bis jeder den Schnipsel hat. Dann geht es gleichzeitig los.</p></div>
-      <section class="card stack"><h2>Alle müssen geladen haben</h2>${rows}</section>
-      <p class="hint">${mine ? esc(mine.name) + ' hört auf diesem Handy.' : 'Dieses Handy wartet auf den Schnipsel.'}</p>
+      <div class="roster">${loadCards()}</div>
+      <div class="wait" aria-live="polite"><span class="spin" aria-hidden="true"></span></div>
     </div>`;
+  }
+
+  function loadCards() {
+    const host = isHost() && !isGuest();
+    return state.match.players.map((player) => {
+      const ready = Boolean(state.match.ready[player.id]);
+      const side = ready
+        ? '<span class="orl-ok" aria-label="Fertig">✓</span>'
+        : loadBar(player);
+      const kick = host && !ready
+        ? `<button type="button" class="orl-x" data-act="kick" data-id="${esc(player.id)}" aria-label="${esc(player.name)} rausnehmen">✕</button>`
+        : '';
+      return `<div class="orl-person"><span>${esc(player.name)}</span>${side}${kick}</div>`;
+    }).join('');
+  }
+
+  function loadBar(player) {
+    const progress = state.progress[player.id];
+    const percent = progress && progress.total
+      ? Math.max(0, Math.min(100, Math.round((progress.received / progress.total) * 100)))
+      : 8;
+    return `<span class="loadbar" aria-label="lädt ${percent} Prozent"><span style="width:${percent}%"></span></span>`;
   }
 
   function loadLabel(player) {
@@ -310,7 +347,7 @@
         <p class="lead">${esc(name ? name.name : '')} war der Imposter.</p>
       </section>
       ${scores}
-      ${isHost() && !isGuest() ? '<button type="button" class="btn" data-act="next">Nächste Runde</button>' : '<p class="hint">Der Host startet die nächste Runde.</p>'}
+      ${isHost() && !isGuest() ? '<button type="button" class="btn" data-act="next">Neuen Song auswählen</button>' : '<p class="hint">Der Host wählt den nächsten Song.</p>'}
       <button type="button" class="btn ghost" data-act="back-lobby">Zur Lobby</button>
     </div>`;
   }
@@ -609,6 +646,8 @@
 
   async function onFiles(list) {
     state.error = '';
+    state.songBusy = true;
+    render();
     const files = Array.from(list || []);
     for (let i = 0; i < files.length; i += 1) {
       try {
@@ -618,6 +657,7 @@
         state.error = errorText(error);
       }
     }
+    state.songBusy = false;
     render();
   }
 
@@ -699,6 +739,7 @@
       return;
     }
     state.busy = true;
+    state.playBusy = true;
     state.error = '';
     render();
     try {
@@ -723,7 +764,59 @@
       state.screen = 'library';
     }
     state.busy = false;
+    state.playBusy = false;
     render();
+  }
+
+  function kickLoading(id) {
+    if (!(isHost() && !isGuest())) return;
+    const pid = String(id);
+    if (!state.match.players.some((player) => player.id === pid) || state.match.ready[pid]) return;
+    const wasImposter = state.match.imposterId === pid;
+    state.seated = state.seated.filter((player) => player.id !== pid);
+    delete state.claims[pid];
+    delete state.origin[pid];
+    state.match.players = state.match.players.filter((player) => player.id !== pid);
+    delete state.match.ready[pid];
+    delete state.progress[pid];
+    if (state.myPid === pid) state.myPid = '';
+    if (!state.match.players.length) {
+      state.error = 'Niemand ist mehr in der Runde.';
+      publish();
+      render();
+      return;
+    }
+    if (wasImposter) {
+      const next = state.match.players[Math.floor(Math.random() * state.match.players.length)];
+      state.match.imposterId = next.id;
+      delete state.match.ready[next.id];
+      delete state.progress[next.id];
+      publish();
+      render();
+      handImposterClip(next);
+      return;
+    }
+    publish();
+    render();
+    maybeStart();
+  }
+
+  async function handImposterClip(player) {
+    const pair = state.localPair;
+    if (!pair || !player) return;
+    if (player.id === state.myPid) {
+      acceptClip(pair.clipId, pair.imposter);
+      return;
+    }
+    const mp = mpApi();
+    const to = state.claims[player.id];
+    if (!mp || !to) return;
+    if (typeof mp.sendBinary === 'function') {
+      await mp.sendBinary({ to: to, bytes: pair.imposter, id: pair.clipId });
+      return;
+    }
+    const parts = A.splitClip(pair.imposter, pair.clipId);
+    for (let i = 0; i < parts.length; i += 1) await mp.send(parts[i], { to: to });
   }
 
   function remoteTargets() {
@@ -775,7 +868,10 @@
     const after = total ? Math.floor((received / total) * 10) : 0;
     if (before === after) return;
     render();
-    if (isHost() && !isGuest()) return;
+    if (isHost() && !isGuest()) {
+      publish();
+      return;
+    }
     const mp = mpApi();
     if (mp && mp.send && state.myPid === playerId) {
       mp.send({ t: 'prog', pid: playerId, id: progress.id, received: received, total: total });
@@ -881,6 +977,25 @@
     }
   }
 
+  function forceNextSong() {
+    if (!(isHost() && !isGuest())) return;
+    stopPlayback();
+    state.tracks = [];
+    state.clip = null;
+    state.clipBytes = null;
+    state.nextClip = null;
+    state.progress = {};
+    state.pendingClaim = '';
+    state.myBallot = '';
+    state.busy = false;
+    state.error = '';
+    state.info = '';
+    state.screen = 'library';
+    state.match.phase = 'lobby';
+    publish();
+    render();
+  }
+
   function abortGame() {
     if (!(isHost() && !isGuest())) return;
     stopPlayback();
@@ -970,6 +1085,7 @@
     view.seated = state.seated;
     view.claims = state.claims;
     view.screen = state.screen;
+    view.progress = state.progress;
     mp.broadcast(view);
   }
 
@@ -994,6 +1110,7 @@
     state.match = match;
     if (Array.isArray(view.seated)) state.seated = view.seated;
     if (view.claims && typeof view.claims === 'object') state.claims = view.claims;
+    if (view.progress && typeof view.progress === 'object') state.progress = view.progress;
     adoptIdentity();
     const voted = Array.isArray(view.ballots) ? view.ballots : [];
     if (state.myPid && voted.indexOf(state.myPid) < 0) state.myBallot = '';
@@ -1222,6 +1339,7 @@
     if (act === 'to-library') { state.screen = 'library'; render(); }
     if (act === 'back-lobby') { state.screen = 'lobby'; postShell('index'); render(); }
     if (act === 'abort') abortGame();
+    if (act === 'force-song') forceNextSong();
     if (act === 'pick') return;
     if (act === 'pick-file') pickFiles();
     if (act === 'source') {
@@ -1234,13 +1352,18 @@
     if (act === 'add-hit') addHit(button.dataset.id);
     if (act === 'pick') return;
     if (act === 'prepare') prepareRound();
+    if (act === 'kick') kickLoading(button.dataset.id);
     if (act === 'unlock') unlockAudio().then(render);
     if (act === 'play') playRound();
     if (act === 'hear-as') chooseHear(button.dataset.id);
     if (act === 'claim') sendVote('claim', { pid: button.dataset.id });
     if (act === 'vote-back') sendVote('back', { pid: state.pendingClaim });
     if (act === 'suspect') sendVote('cast', { pid: state.myPid, suspect: button.dataset.id });
-    if (act === 'next') prepareRound();
+    if (act === 'next') {
+      state.tracks = [];
+      state.screen = 'library';
+      render();
+    }
     if (act === 'qr') applyShell('qr');
     if (act === 'close-qr') applyShell('index');
     if (act === 'toggle-random') {
@@ -1254,6 +1377,8 @@
     const api = bridge();
     if (api && api.files && typeof api.files.pickAudio === 'function') {
       state.error = '';
+      state.songBusy = true;
+      render();
       try {
         const picked = await api.files.pickAudio({ accept: ['audio/mpeg', 'audio/mp3', '.mp3'], multiple: true });
         const canCut = Boolean(bridgeAudio() && typeof bridgeAudio().cut === 'function');
@@ -1282,6 +1407,7 @@
       } catch (error) {
         state.error = errorText(error);
       }
+      state.songBusy = false;
       render();
       return;
     }
