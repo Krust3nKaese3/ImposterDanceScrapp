@@ -31,8 +31,10 @@
     selfDevice: '',
     roomCode: '',
     claims: {},
+    origin: {},
     myPid: '',
     audioOn: false,
+    myBallot: '',
     guestHint: false,
     clip: null,
     clipBytes: null,
@@ -71,6 +73,21 @@
 
   function isHost() {
     return state.role === 'host' || state.role === 'solo';
+  }
+
+  function hostDevice() {
+    return state.selfDevice || 'local';
+  }
+
+  function adoptIdentity() {
+    const device = isGuest() ? state.selfDevice : hostDevice();
+    if (!device) return;
+    const mine = Object.keys(state.claims).find((id) => state.claims[id] === device);
+    if (mine) state.myPid = mine;
+  }
+
+  function hostReady() {
+    return Boolean(state.myPid && state.claims[state.myPid] === hostDevice() && state.seated.some((player) => player.id === state.myPid));
   }
 
   function esc(value) {
@@ -220,7 +237,7 @@
       </section>`;
     return `${header()}<div class="stack">${banners()}
       ${body}
-      <button type="button" class="btn" data-act="prepare" ${!state.tracks.length || state.busy ? 'disabled' : ''}>Runde vorbereiten</button>
+      <button type="button" class="btn" data-act="prepare" ${!state.tracks.length || state.busy ? 'disabled' : ''}>Abspielen</button>
       <button type="button" class="btn ghost" data-act="back-lobby">Zurück</button>
       ${sourceBar()}
     </div>`;
@@ -231,15 +248,10 @@
       return `<div class="choice secondary"><span>${esc(player.name)}</span><span>${esc(loadLabel(player))}</span></div>`;
     }).join('');
     const mine = state.myPid ? state.match.players.find((player) => player.id === state.myPid) : null;
-    const unlock = state.audioOn
-      ? ''
-      : '<button type="button" class="btn" data-act="unlock">Bereit</button><p class="hint">Bereit schaltet den Ton frei und hält das Display wach.</p>';
     return `${header()}<div class="stack">${banners()}
+      <div class="wait"><span class="spin" aria-hidden="true"></span><p class="hint">Warten, bis jeder den Schnipsel hat. Dann geht es gleichzeitig los.</p></div>
       <section class="card stack"><h2>Alle müssen geladen haben</h2>${rows}</section>
-      ${unlock}
-      <p class="hint">${mine ? esc(mine.name) + ' hört auf diesem Handy.' : 'Wähle, wer auf diesem Handy hört.'}</p>
-      ${namePicker()}
-      ${isHost() && !isGuest() ? `<button type="button" class="btn" data-act="play" ${L.allReady(state.match) && state.audioOn ? '' : 'disabled'}>Abspielen</button>` : '<p class="hint">Der Host startet, sobald jede Person geladen hat.</p>'}
+      <p class="hint">${mine ? esc(mine.name) + ' hört auf diesem Handy.' : 'Dieses Handy wartet auf den Schnipsel.'}</p>
     </div>`;
   }
 
@@ -263,26 +275,27 @@
 
   function voteHtml() {
     const vote = state.match.vote || { ballots: {}, claimed: {} };
-    const claimed = state.pendingClaim || '';
-    if (claimed && vote.claimed[claimed] && !vote.ballots[claimed]) {
-      const choices = state.match.players.filter((player) => player.id !== claimed).map((player) =>
-        `<button type="button" class="choice" data-act="suspect" data-id="${esc(player.id)}">${esc(player.name)}</button>`).join('');
-      const who = state.match.players.find((player) => player.id === claimed);
+    const me = state.match.players.find((player) => player.id === state.myPid);
+    if (!me) {
       return `${header()}<div class="stack">${banners()}
-        <h2>${esc(who ? who.name : '')} stimmt</h2>
-        <p class="hint">Wen wählt ihr raus?</p>
-        ${choices}
-        <button type="button" class="btn secondary" data-act="vote-back">Zurück</button>
+        <h2>Wer ist der Imposter?</h2>
+        <p class="hint">Dieses Handy hat in der Lobby niemanden gewählt.</p>
       </div>`;
     }
-    const names = state.match.players.map((player) => {
-      const done = Boolean(vote.ballots[player.id]);
-      return `<button type="button" class="choice ${done ? 'done' : ''}" data-act="claim" data-id="${esc(player.id)}" ${done ? 'disabled' : ''}>${esc(player.name)}</button>`;
-    }).join('');
+    const done = Boolean(vote.ballots[me.id] || state.myBallot);
+    if (done) {
+      const open = state.match.players.filter((player) => !vote.ballots[player.id]).length;
+      return `${header()}<div class="stack">${banners()}
+        <h2>Stimme ist abgegeben</h2>
+        <p class="hint">${open ? 'Noch ' + open + ' ohne Stimme.' : 'Alle haben gewählt.'}</p>
+      </div>`;
+    }
+    const choices = state.match.players.filter((player) => player.id !== me.id).map((player) =>
+      `<button type="button" class="choice" data-act="suspect" data-id="${esc(player.id)}">${esc(player.name)}</button>`).join('');
     return `${header()}<div class="stack">${banners()}
       <h2>Wer ist der Imposter?</h2>
-      <p class="hint">Keine feste Reihenfolge. Jede Person tippt den eigenen Namen. Zurück verbraucht den Zug nicht. Liegt nur ein Handy herum, geht dieselbe Liste reihum.</p>
-      ${names}
+      <p class="hint">${esc(me.name)} stimmt auf diesem Handy.</p>
+      ${choices}
     </div>`;
   }
 
@@ -318,15 +331,28 @@
   }
 
   function rosterModel() {
+    const device = hostDevice();
+    const hostHere = isHost() && !isGuest();
+    const everyone = state.seated.length >= L.MIN_PLAYERS && state.seated.every((player) => state.claims[player.id]) && hostReady();
     return {
       query: state.query,
       directory: state.directory.map((player) => ({ id: String(player.id), label: labelOf(player) })),
-      seated: state.seated.map((player) => ({ id: String(player.id), pid: String(player.id), label: labelOf(player) })),
+      seated: state.seated.map((player) => {
+        const owner = state.claims[player.id] || '';
+        const mine = isGuest() ? state.selfDevice : device;
+        return {
+          id: String(player.id),
+          pid: String(player.id),
+          label: labelOf(player),
+          connected: Boolean(owner),
+          claimable: (!owner || owner === mine) && (hostHere || isGuest())
+        };
+      }),
       startLabel: 'Musik wählen',
-      startDisabled: state.seated.length < L.MIN_PLAYERS || isGuest(),
+      startDisabled: !everyone || isGuest(),
       statsLabel: '',
-      canRemove: !isGuest(),
-      rulesHtml: '<p>Dieselbe Stelle, ' + danceSeconds() + ' Sekunden, eigene Kopfhörer. Eine Person hört nur „Du bist der Imposter“ und danach Stille. Danach stimmt ihr ab.</p>'
+      canRemove: hostHere,
+      rulesHtml: '<p>Jede Person ein Handy. Die Karten legt der Host an. Ein Häkchen heißt, ein Handy hat den Namen gewählt. Wer dabei ist, tippt auf Ich.</p>'
     };
   }
 
@@ -337,7 +363,8 @@
         window.OpenScrRoster.attach(el, {
           onQuery: (value) => { state.query = value; },
           onPick: (id) => { seat(id); },
-          onRemove: (id) => { if (!isGuest()) unseat(id); },
+          onRemove: (id) => { if (isHost() && !isGuest()) unseat(id); },
+          onMine: (id) => { if (isGuest()) seat(id); else claimHost(id); },
           onCreate: (draft) => { addPerson(draft.name, draft.tag); },
           onStart: () => { if (!isGuest()) { state.screen = 'library'; render(); } }
         });
@@ -443,18 +470,79 @@
   }
 
   function seat(id) {
-    const found = state.directory.find((player) => String(player.id) === String(id));
+    const found = state.directory.find((player) => String(player.id) === String(id))
+      || state.seated.find((player) => String(player.id) === String(id));
     if (!found) return;
+    if (isGuest()) {
+      state.myPid = String(found.id);
+      const mp = mpApi();
+      if (mp && mp.send) mp.send({ t: 'seat', pid: String(found.id), name: found.name, tag: found.tag || '' });
+      state.info = '';
+      render();
+      return;
+    }
     if (state.seated.some((player) => String(player.id) === String(found.id))) return;
     state.seated.push({ id: String(found.id), name: found.name, tag: found.tag || '' });
+    state.origin[String(found.id)] = 'host';
     state.query = '';
     persistLobby();
     publish();
     render();
   }
 
+  function claimHost(id) {
+    const pid = String(id);
+    if (!state.seated.some((player) => player.id === pid)) return;
+    const owner = state.claims[pid];
+    const device = hostDevice();
+    if (owner && owner !== device) {
+      state.error = 'Diese Person spielt schon auf einem anderen Handy.';
+      render();
+      return;
+    }
+    Object.keys(state.claims).forEach((key) => {
+      if (state.claims[key] === device) delete state.claims[key];
+    });
+    state.claims[pid] = device;
+    state.myPid = pid;
+    state.error = '';
+    publish();
+    render();
+  }
+
+  function claimGuest(pid, from, draft) {
+    const id = String(pid || '');
+    const known = state.directory.find((item) => String(item.id) === id);
+    const player = known || (draft && draft.name ? { id: id, name: draft.name, tag: draft.tag || '' } : null);
+    if (!player || !from) return;
+    if (!known) state.directory.push({ id: id, name: player.name, tag: player.tag || '' });
+    const owner = state.claims[id];
+    if (owner && owner !== from) return;
+    state.seated.forEach((seat) => {
+      if (state.origin[seat.id] === from && seat.id !== id) {
+        delete state.claims[seat.id];
+        delete state.origin[seat.id];
+      }
+    });
+    state.seated = state.seated.filter((seat) => state.origin[seat.id] !== from || seat.id === id);
+    Object.keys(state.claims).forEach((key) => {
+      if (state.claims[key] === from && key !== id) delete state.claims[key];
+    });
+    if (!state.seated.some((seat) => seat.id === id)) {
+      state.seated.push({ id: id, name: player.name, tag: player.tag || '' });
+      state.origin[id] = from;
+    }
+    state.claims[id] = from;
+    publish();
+    render();
+  }
+
   function unseat(id) {
-    state.seated = state.seated.filter((player) => String(player.id) !== String(id));
+    const pid = String(id);
+    state.seated = state.seated.filter((player) => String(player.id) !== pid);
+    delete state.claims[pid];
+    delete state.origin[pid];
+    if (state.myPid === pid) state.myPid = '';
     persistLobby();
     publish();
     render();
@@ -499,6 +587,12 @@
       }
     }
   }
+
+  window.addEventListener('openscr-names', () => {
+    refreshDirectory().then(() => {
+      if (state.shell === 'index' && state.screen === 'lobby') render();
+    });
+  });
 
   function syncMatchPlayers() {
     const scores = {};
@@ -612,17 +706,21 @@
       syncMatchPlayers();
       const begun = L.beginRound(state.match, Math.random);
       if (!begun.ok) throw new Error('Zu wenige Personen.');
-      if (!state.myPid && state.seated[0]) state.myPid = state.seated[0].id;
-      state.claims[state.myPid] = state.selfDevice || 'local';
+      if (!state.myPid) adoptIdentity();
+      if (state.myPid) state.claims[state.myPid] = hostDevice();
       const pair = await cutPair(Math.random);
       state.localPair = pair;
-      await distribute(pair);
+      state.myBallot = '';
       state.screen = 'ready';
       state.match.phase = 'deal';
+      publish();
+      await distribute(pair);
       deliverLocal();
       publish();
+      maybeStart();
     } catch (error) {
       state.error = errorText(error);
+      state.screen = 'library';
     }
     state.busy = false;
     render();
@@ -692,7 +790,10 @@
       state.clipBytes = bytes;
     } else state.nextClip = { id: id, parsed: parsed };
     if (state.myPid) noteProgress(state.myPid, { id: id, received: 1, total: 1 });
-    if (state.myPid && state.audioOn) tellReady();
+    const ctx = audioContext();
+    if (ctx && ctx.resume) ctx.resume().catch(() => {});
+    state.audioOn = true;
+    tellReady();
   }
 
   function tellReady() {
@@ -701,13 +802,19 @@
       L.markReady(state.match, state.myPid);
       publish();
       render();
+      maybeStart();
       return;
     }
     const mp = mpApi();
     if (mp && mp.send) mp.send({ t: 'ready', id: state.match.clipId, pid: state.myPid });
   }
 
+  function maybeStart() {
+    if (isHost() && !isGuest() && state.match.phase !== 'dance' && L.allReady(state.match)) playRound();
+  }
+
   async function playRound() {
+    if (state.match.phase === 'dance') return;
     if (!L.allReady(state.match)) return;
     const startAt = Date.now() + 700;
     const armed = L.arm(state.match, startAt);
@@ -837,8 +944,9 @@
   }
 
   function onSuspect(id, voterId) {
-    const voter = voterId || state.pendingClaim;
-    if (!voter) return;
+    const voter = voterId || state.myPid;
+    if (!voter || !state.match.vote) return;
+    if (!state.match.vote.claimed[voter]) L.claim(state.match, voter);
     const result = L.cast(state.match, voter, id);
     if (!result.ok) {
       state.error = 'Die Stimme gilt nur für eine andere Person.';
@@ -860,6 +968,7 @@
     if (!mp || !mp.broadcast) return;
     const view = L.publicView(state.match, '');
     view.seated = state.seated;
+    view.claims = state.claims;
     view.screen = state.screen;
     mp.broadcast(view);
   }
@@ -884,6 +993,10 @@
     }
     state.match = match;
     if (Array.isArray(view.seated)) state.seated = view.seated;
+    if (view.claims && typeof view.claims === 'object') state.claims = view.claims;
+    adoptIdentity();
+    const voted = Array.isArray(view.ballots) ? view.ballots : [];
+    if (state.myPid && voted.indexOf(state.myPid) < 0) state.myBallot = '';
     state.screen = view.screen || phaseScreen(view.phase);
     render();
   }
@@ -927,6 +1040,10 @@
       publish();
       return;
     }
+    if (data.t === 'seat' && isHost() && !isGuest()) {
+      claimGuest(data.pid, message.from || '', { name: data.name, tag: data.tag });
+      return;
+    }
     if (data.t === 'prog' && isHost()) {
       state.progress[data.pid] = { id: data.id, received: Number(data.received) || 0, total: Number(data.total) || 0 };
       render();
@@ -936,6 +1053,7 @@
       if (data.id === state.match.clipId) L.markReady(state.match, data.pid);
       publish();
       render();
+      maybeStart();
       return;
     }
     if (data.t === 'go') {
@@ -954,13 +1072,10 @@
 
   function sendVote(step, extra) {
     if (isHost() && !isGuest()) {
-      if (step === 'claim') onClaim(extra.pid, true);
-      if (step === 'back') onBack(state.pendingClaim);
-      if (step === 'cast') onSuspect(extra.suspect, state.pendingClaim);
+      if (step === 'cast') onSuspect(extra.suspect, extra.pid || state.myPid);
       return;
     }
-    if (step === 'claim') state.pendingClaim = extra.pid;
-    if (step === 'back' || step === 'cast') state.pendingClaim = '';
+    if (step === 'cast') state.myBallot = extra.suspect || '';
     const mp = mpApi();
     if (mp && mp.send) mp.send(Object.assign({ t: 'vote', step: step }, extra));
     render();
@@ -1124,7 +1239,7 @@
     if (act === 'hear-as') chooseHear(button.dataset.id);
     if (act === 'claim') sendVote('claim', { pid: button.dataset.id });
     if (act === 'vote-back') sendVote('back', { pid: state.pendingClaim });
-    if (act === 'suspect') sendVote('cast', { pid: state.pendingClaim, suspect: button.dataset.id });
+    if (act === 'suspect') sendVote('cast', { pid: state.myPid, suspect: button.dataset.id });
     if (act === 'next') prepareRound();
     if (act === 'qr') applyShell('qr');
     if (act === 'close-qr') applyShell('index');
@@ -1308,7 +1423,7 @@
   restoreLobby().then(refreshDirectory).then(() => {
     const pick = document.getElementById('file-pick');
     bootNet().then(() => {
-      if (!state.myPid && state.seated[0]) state.myPid = state.seated[0].id;
+      adoptIdentity();
       if (state.role === 'host') publish();
       render();
     });

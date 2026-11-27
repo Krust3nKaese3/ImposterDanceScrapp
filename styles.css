@@ -91,7 +91,17 @@ input[type="text"] {
   gap: 8px;
   font-size: 42px;
 }
-.warn { color: #fde68a; }
+.wait { display: flex; align-items: center; gap: 12px; }
+.spin {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--lime);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .good { color: var(--lime); }
 .linkish { background: transparent; border: 0; color: var(--muted); min-height: 44px; font-weight: 700; }
 .error { color: #fecaca; margin: 0; }
