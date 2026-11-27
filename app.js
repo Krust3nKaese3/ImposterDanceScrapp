@@ -7,6 +7,7 @@
   const A = window.ImposterAudio;
   const L = window.ImposterLogic;
   const AN = window.ImposterAnnounce;
+  const S = window.ImposterSources;
   const LOBBY_KEY = 'imposterdance.lobby.v1';
   const SCRAP_URL = 'https://github.com/Krust3nKaese3/ImposterDanceScrapp';
 
@@ -20,6 +21,9 @@
     draftName: '',
     draftTag: '',
     tracks: [],
+    sourceId: 'local-mp3',
+    sourceQuery: '',
+    hits: [],
     match: L.createMatch([]),
     error: '',
     info: '',
@@ -135,9 +139,19 @@
     </div>`;
   }
 
-  function libraryHtml() {
-    const rows = state.tracks.map((track) => {
-      const max = Math.max(0, track.seconds - A.SECONDS);
+  function iconHtml(icon) {
+    const text = String(icon || '♪');
+    if (/^(https?:|data:image\/)/.test(text)) return `<img alt="" src="${esc(text)}">`;
+    return esc(text);
+  }
+
+  function activeSource() {
+    return S.get(state.sourceId) || S.get('local-mp3') || null;
+  }
+
+  function trackRows() {
+    return state.tracks.map((track) => {
+      const max = Math.max(0, (track.seconds || 0) - A.SECONDS);
       return `<div class="track"><strong>${esc(track.name)}</strong>
         <label>Start bei ${track.start.toFixed(1)} s
           <input type="range" min="0" max="${max.toFixed(2)}" step="0.1" value="${track.start}" data-act="start-at" data-id="${esc(track.id)}" ${track.random ? 'disabled' : ''}>
@@ -145,16 +159,39 @@
         <button type="button" class="btn ghost" data-act="toggle-random" data-id="${esc(track.id)}">${track.random ? 'Zufälliger Start: an' : 'Zufälliger Start: aus'}</button>
       </div>`;
     }).join('');
-    return `${header()}<div class="stack">${banners()}
-      <section class="card stack">
+  }
+
+  function sourceBar() {
+    const list = S.list();
+    if (list.length < 2) return '';
+    const buttons = list.map((source) => `<button type="button" class="source ${source.id === state.sourceId ? 'on' : ''}" data-act="source" data-id="${esc(source.id)}" aria-label="${esc(source.name)}">${iconHtml(source.icon)}<span>${esc(source.name)}</span></button>`).join('');
+    return `<nav class="sourcebar" aria-label="Musikquellen">${buttons}</nav>`;
+  }
+
+  function libraryHtml() {
+    const source = activeSource();
+    const files = !source || source.ui === 'files';
+    const body = files
+      ? `<section class="card stack">
         <h2>Songs vom Host-Handy</h2>
         <p class="hint">MP3 auswählen. Daraus wird vor dem Start ein 10-Sekunden-Schnipsel von etwa 160 KB. Es geht komplett über das WLAN, nichts wird gestreamt.</p>
         <button type="button" class="btn secondary" data-act="pick-file">MP3 wählen</button>
         <input id="file-pick" type="file" accept="audio/mpeg,audio/mp3,.mp3" multiple hidden>
-        ${rows || '<p class="hint">Noch keine Datei.</p>'}
-      </section>
+        ${trackRows() || '<p class="hint">Noch keine Datei.</p>'}
+      </section>`
+      : `<section class="card stack">
+        <h2>${esc(source.name)}</h2>
+        <p class="hint">Suche einen Titel. Der Host holt daraus 10 Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>
+        <input id="source-query" type="text" maxlength="80" placeholder="Suchen" aria-label="Musik suchen" value="${esc(state.sourceQuery)}">
+        <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
+        ${state.hits.map((hit) => `<button type="button" class="choice" data-act="add-hit" data-id="${esc(hit.id)}">${esc(hit.title || hit.name || hit.id)}</button>`).join('') || '<p class="hint">Noch keine Treffer.</p>'}
+        ${trackRows() || '<p class="hint">Noch nichts für die Runde gewählt.</p>'}
+      </section>`;
+    return `${header()}<div class="stack">${banners()}
+      ${body}
       <button type="button" class="btn" data-act="prepare" ${!state.tracks.length || state.busy ? 'disabled' : ''}>Runde vorbereiten</button>
       <button type="button" class="btn ghost" data-act="back-lobby">Zurück</button>
+      ${sourceBar()}
     </div>`;
   }
 
@@ -414,11 +451,12 @@
     const channels = [];
     for (let c = 0; c < decoded.numberOfChannels; c += 1) channels.push(decoded.getChannelData(c));
     const mono = channels.length > 1 ? A.mixToMono(channels) : A.floatChannelToInt16(channels[0]);
+    const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
     return {
-      id: 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36),
+      id: id,
       name: file.name,
-      pcm: mono,
-      rate: decoded.sampleRate,
+      sourceId: 'local-mp3',
+      item: { id: id, title: file.name, pcm: mono, rate: decoded.sampleRate, seconds: decoded.duration },
       seconds: decoded.duration,
       start: 0,
       random: true
@@ -435,43 +473,41 @@
     return api && api.audio ? api.audio : null;
   }
 
-  async function decodeTrack(track) {
-    const ctx = audioContext();
-    if (!ctx || !ctx.decodeAudioData || !track.bytes) throw new Error('Dieses Handy kann die Datei nicht dekodieren.');
-    const decoded = await ctx.decodeAudioData(track.bytes.buffer.slice(track.bytes.byteOffset, track.bytes.byteOffset + track.bytes.byteLength));
-    const channels = [];
-    for (let c = 0; c < decoded.numberOfChannels; c += 1) channels.push(decoded.getChannelData(c));
-    track.pcm = channels.length > 1 ? A.mixToMono(channels) : A.floatChannelToInt16(channels[0]);
-    track.rate = decoded.sampleRate;
-    track.seconds = decoded.duration;
+  function startSeconds(track, rng) {
+    const rate = (track.item && track.item.rate) || A.RATE;
+    if (track.random && track.item && track.item.pcm) {
+      const windowSamples = Math.round(A.SECONDS * rate);
+      return A.randomStart(track.item.pcm.length, windowSamples, rng) / rate;
+    }
+    if (track.random && track.seconds > A.SECONDS) {
+      const roll = typeof rng === 'function' ? rng() : Math.random();
+      return roll * (track.seconds - A.SECONDS);
+    }
+    return track.start || 0;
   }
 
-  async function cutTrack(track, rng) {
-    const roll = typeof rng === 'function' ? rng : Math.random;
-    const span = Math.max(0, track.seconds * 1000 - A.SECONDS * 1000);
-    const startMs = track.random ? Math.floor(roll() * (span + 1)) : Math.round(track.start * 1000);
+  async function clipBytesFor(track, rng) {
+    const raw = (track.item && track.item.bytes) || track.bytes;
     const audioApi = bridgeAudio();
-    if (track.bytes && audioApi && typeof audioApi.cut === 'function') {
+    if (raw && audioApi && typeof audioApi.cut === 'function') {
       const clip = await audioApi.cut({
-        bytes: track.bytes,
-        startMs: startMs,
+        bytes: raw,
+        startMs: Math.round(startSeconds(track, rng) * 1000),
         durationMs: A.SECONDS * 1000,
         targetBytes: A.CLIP_BYTES
       });
       return clip.bytes;
     }
-    if (!track.pcm) await decodeTrack(track);
-    const total = track.pcm.length;
-    const windowSamples = Math.round(A.SECONDS * track.rate);
-    const start = track.random ? A.randomStart(total, windowSamples, rng) : Math.round(track.start * track.rate);
-    return A.clipFromPcm(track.pcm, track.rate, start);
+    const source = S.get(track.sourceId || 'local-mp3');
+    if (!source) throw new Error('Die Musikquelle fehlt.');
+    const produced = await source.getClip(track.item, startSeconds(track, rng), A.SECONDS);
+    return S.toClipBytes(produced, A);
   }
 
   async function cutPair(rng) {
-    if (!state.tracks.length) throw new Error('Zuerst eine MP3 wählen.');
-    const index = (state.match.round) % state.tracks.length;
-    const track = state.tracks[index];
-    const song = await cutTrack(track, rng);
+    if (!state.tracks.length) throw new Error('Zuerst eine Musik wählen.');
+    const track = state.tracks[state.match.round % state.tracks.length];
+    const song = await clipBytesFor(track, rng);
     const imposter = A.imposterFromAnnouncement(announcementBytes());
     if (song.length !== imposter.length) throw new Error('Die beiden Clips sind nicht gleich lang.');
     return { song: song, imposter: imposter, clipId: 'c' + (state.match.round || 1) };
@@ -649,7 +685,7 @@
     if (!state.tracks.length) return;
     const round = state.match.round;
     const track = state.tracks[round % state.tracks.length];
-    cutTrack(track, Math.random).then((song) => {
+    clipBytesFor(track, Math.random).then((song) => {
       state.nextPrepared = {
         id: 'c' + (round + 1),
         song: song,
@@ -947,6 +983,14 @@
     if (act === 'back-lobby') { state.screen = 'lobby'; state.shell = 'index'; render(); }
     if (act === 'pick') return;
     if (act === 'pick-file') pickFiles();
+    if (act === 'source') {
+      state.sourceId = button.dataset.id;
+      state.hits = [];
+      state.error = '';
+      render();
+    }
+    if (act === 'search-source') searchSource();
+    if (act === 'add-hit') addHit(button.dataset.id);
     if (act === 'pick') return;
     if (act === 'prepare') prepareRound();
     if (act === 'unlock') unlockAudio().then(render);
@@ -971,18 +1015,29 @@
       state.error = '';
       try {
         const picked = await api.files.pickAudio({ accept: ['audio/mpeg', 'audio/mp3', '.mp3'], multiple: true });
-        (picked || []).forEach((file) => {
+        const canCut = Boolean(bridgeAudio() && typeof bridgeAudio().cut === 'function');
+        for (let i = 0; i < (picked || []).length; i += 1) {
+          const file = picked[i];
+          const id = 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
+          let seconds = (Number(file.durationMs) || 0) / 1000;
+          const item = { id: id, title: file.name, bytes: file.bytes, seconds: seconds };
+          if (!canCut) {
+            const decoded = await readTrack({ name: file.name, arrayBuffer: async () => file.bytes.buffer.slice(file.bytes.byteOffset, file.bytes.byteOffset + file.bytes.byteLength) });
+            item.pcm = decoded.item.pcm;
+            item.rate = decoded.item.rate;
+            seconds = decoded.seconds;
+          }
           state.tracks.push({
-            id: 't_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36),
+            id: id,
             name: file.name,
-            bytes: file.bytes,
-            pcm: null,
-            rate: A.RATE,
-            seconds: (Number(file.durationMs) || 0) / 1000,
+            sourceId: 'local-mp3',
+            bytes: canCut ? file.bytes : null,
+            item: item,
+            seconds: seconds,
             start: 0,
             random: true
           });
-        });
+        }
       } catch (error) {
         state.error = errorText(error);
       }
@@ -1003,6 +1058,7 @@
         field.setSelectionRange(field.value.length, field.value.length);
       }
     }
+    if (event.target.id === 'source-query') state.sourceQuery = event.target.value;
     if (event.target.dataset && event.target.dataset.act === 'start-at') {
       const track = state.tracks.find((item) => item.id === event.target.dataset.id);
       if (track) track.start = Number(event.target.value) || 0;
@@ -1017,7 +1073,80 @@
     if (event.target.id === 'file-pick') onFiles(event.target.files);
   });
 
+  function registerLocalSource() {
+    S.registerMusicSource({
+      id: 'local-mp3',
+      name: 'MP3',
+      icon: '♫',
+      ui: 'files',
+      search: function () {
+        return state.tracks.filter((track) => track.sourceId === 'local-mp3').map((track) => ({
+          id: track.id,
+          title: track.name,
+          seconds: track.seconds
+        }));
+      },
+      getClip: function (item, startSec, durationSec) {
+        const rate = item.rate || A.RATE;
+        const start = Math.max(0, Math.round((startSec || 0) * rate));
+        const count = Math.max(1, Math.round((durationSec || A.SECONDS) * rate));
+        const out = new Int16Array(count);
+        const pcm = item.pcm || new Int16Array(0);
+        for (let i = 0; i < count; i += 1) {
+          const at = start + i;
+          out[i] = at < pcm.length ? pcm[at] : 0;
+        }
+        return { pcm: out, sampleRate: rate };
+      }
+    });
+  }
+
+  async function searchSource() {
+    const source = activeSource();
+    if (!source || source.ui === 'files') return;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      const hits = await source.search(state.sourceQuery || '');
+      state.hits = Array.isArray(hits) ? hits : [];
+      if (!state.hits.length) state.info = 'Keine Treffer.';
+      else state.info = '';
+    } catch (error) {
+      state.error = errorText(error);
+    }
+    state.busy = false;
+    render();
+  }
+
+  function addHit(id) {
+    const hit = state.hits.find((item) => String(item.id) === String(id));
+    if (!hit) return;
+    const seconds = Number(hit.seconds || hit.duration || 0);
+    state.tracks.push({
+      id: 'q_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36),
+      name: hit.title || hit.name || 'Titel',
+      sourceId: state.sourceId,
+      item: hit,
+      seconds: seconds,
+      start: 0,
+      random: seconds > A.SECONDS
+    });
+    state.info = '';
+    render();
+  }
+
+  registerLocalSource();
+  S.onChange(function () {
+    if (state.screen === 'library' && state.shell === 'index') render();
+  });
+
+  const prior = window.ImposterDance || {};
   window.ImposterDance = {
+    version: prior.version || S.VERSION,
+    scrappId: prior.scrappId || S.SCRAPP_ID,
+    registerMusicSource: prior.registerMusicSource || S.registerMusicSource,
+    listMusicSources: prior.listMusicSources || S.list,
     state: state,
     prepareRound: prepareRound,
     unlockAudio: unlockAudio
