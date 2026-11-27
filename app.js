@@ -56,6 +56,7 @@
   }
 
   const assembler = A.createAssembler();
+  const binaryAssembler = A.createAssembler();
   let announced = null;
   let playGen = 0;
 
@@ -836,7 +837,7 @@
     const to = state.claims[player.id];
     if (!mp || !to) return;
     if (typeof mp.sendBinary === 'function') {
-      await mp.sendBinary({ to: to, bytes: pair.imposter, id: pair.clipId });
+      await sendBinaryClip(mp, to, pair.imposter, pair.clipId);
       return;
     }
     const parts = A.splitClip(pair.imposter, pair.clipId);
@@ -858,10 +859,7 @@
       for (let i = 0; i < targets.length; i += 1) {
         const player = targets[i];
         const bytes = player.id === state.match.imposterId ? pair.imposter : pair.song;
-        const pause = L.binaryWaitMs(state.binarySent, bytes.length, Date.now());
-        if (pause) await wait(pause);
-        await mp.sendBinary({ to: state.claims[player.id], bytes: bytes, id: pair.clipId });
-        state.binarySent.push({ at: Date.now(), n: bytes.length });
+        await sendBinaryClip(mp, state.claims[player.id], bytes, pair.clipId);
       }
       return;
     }
@@ -873,6 +871,17 @@
     for (let i = 0; i < jobs.length; i += 1) {
       await mp.send(jobs[i].data, { to: jobs[i].to });
       if (i % 6 === 5) await wait(800);
+    }
+  }
+
+  async function sendBinaryClip(mp, to, bytes, clipId) {
+    const parts = A.binaryParts(bytes, clipId);
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i];
+      const pause = L.binaryWaitMs(state.binarySent, part.bytes.length, Date.now());
+      if (pause) await wait(pause);
+      await mp.sendBinary({ to: to, bytes: part.bytes, id: part.id });
+      state.binarySent.push({ at: Date.now(), n: part.bytes.length });
     }
   }
 
@@ -1264,8 +1273,9 @@
     mp.onMessage((message) => onNet(message));
     if (typeof mp.onBinary === 'function') {
       mp.onBinary((message) => {
-        if (!message) return;
-        acceptClip(message.id, message.bytes);
+        const done = A.takeBinaryPart(binaryAssembler, message);
+        if (!done) return;
+        acceptClip(done.id, done.bytes);
         render();
       });
     }

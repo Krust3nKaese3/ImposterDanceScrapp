@@ -16,6 +16,7 @@
   const HEADER = 12;
   const CLIP_BYTES = HEADER + SAMPLES;
   const RAW_CHUNK = 18000;
+  const BINARY_MAX = 256 * 1024;
 
   function mulawEncodeSample(sample) {
     const BIAS = 0x84;
@@ -208,8 +209,52 @@
     return parts;
   }
 
+  function binaryParts(bytes, clipId) {
+    const raw = bytes || new Uint8Array(0);
+    const id = String(clipId || '');
+    if (raw.length <= BINARY_MAX) return [{ id: id, bytes: raw }];
+    const n = Math.ceil(raw.length / BINARY_MAX);
+    const parts = [];
+    for (let i = 0; i < n; i += 1) {
+      const slice = raw.subarray(i * BINARY_MAX, Math.min(raw.length, (i + 1) * BINARY_MAX));
+      const copy = new Uint8Array(slice.length);
+      copy.set(slice);
+      parts.push({ id: id + '#' + i + '/' + n, bytes: copy });
+    }
+    return parts;
+  }
+
   function createAssembler() {
     return { clips: {} };
+  }
+
+  function takeBinaryPart(assembler, message) {
+    if (!message || !message.id || !message.bytes) return null;
+    const id = String(message.id);
+    const mark = id.lastIndexOf('#');
+    const head = mark < 0 ? '' : id.slice(mark + 1);
+    const slash = head.indexOf('/');
+    const index = slash < 0 ? NaN : Number(head.slice(0, slash));
+    const count = slash < 0 ? NaN : Number(head.slice(slash + 1));
+    if (mark < 0 || !Number.isInteger(index) || !Number.isInteger(count) || count < 2 || index < 0 || index >= count) {
+      return { id: id, bytes: message.bytes };
+    }
+    const clipId = id.slice(0, mark);
+    const bucket = assembler.clips[clipId] || (assembler.clips[clipId] = { n: count, parts: [] });
+    bucket.n = count;
+    bucket.parts[index] = message.bytes;
+    if (bucket.parts.length < count) return null;
+    for (let i = 0; i < count; i += 1) if (!bucket.parts[i]) return null;
+    let total = 0;
+    bucket.parts.forEach((piece) => { total += piece.length; });
+    const out = new Uint8Array(total);
+    let offset = 0;
+    bucket.parts.forEach((piece) => {
+      out.set(piece, offset);
+      offset += piece.length;
+    });
+    delete assembler.clips[clipId];
+    return { id: clipId, bytes: out };
   }
 
   function pushChunk(assembler, message) {
@@ -283,6 +328,7 @@
     SAMPLES: SAMPLES,
     CLIP_BYTES: CLIP_BYTES,
     RAW_CHUNK: RAW_CHUNK,
+    BINARY_MAX: BINARY_MAX,
     mulawEncodeSample: mulawEncodeSample,
     mulawDecodeSample: mulawDecodeSample,
     encodeMulaw: encodeMulaw,
@@ -303,8 +349,10 @@
     bytesToB64: bytesToB64,
     b64ToBytes: b64ToBytes,
     splitClip: splitClip,
+    binaryParts: binaryParts,
     createAssembler: createAssembler,
     pushChunk: pushChunk,
+    takeBinaryPart: takeBinaryPart,
     cutMp3: cutMp3
   };
 });
