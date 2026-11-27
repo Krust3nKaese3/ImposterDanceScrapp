@@ -33,7 +33,7 @@ h2 { font-size: 20px; margin: 0; }
 }
 .btn.secondary, .choice.secondary { background: transparent; color: var(--ink); border: 1px solid rgba(255, 255, 255, 0.16); }
 .btn.ghost { background: #1c1c22; color: var(--ink); }
-.btn:disabled { opacity: 0.45; }
+.btn.bad { background: #3f1d1d; color: #fecaca; }
 .choice { width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; border-radius: 16px; }
 .choice.done { opacity: 0.45; }
 .choice.mine { box-shadow: inset 0 0 0 2px var(--lime); }

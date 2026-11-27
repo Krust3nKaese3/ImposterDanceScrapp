@@ -53,6 +53,7 @@
 
   const assembler = A.createAssembler();
   let announced = null;
+  let playGen = 0;
 
   function bridge() {
     return window.OpenScrBridge || window.EveryAppBridge || null;
@@ -114,13 +115,18 @@
   }
 
   function screenHtml() {
-    if (state.screen === 'lobby') return lobbyHtml();
-    if (state.screen === 'library') return libraryHtml();
-    if (state.screen === 'deal' || state.screen === 'ready') return readyHtml();
-    if (state.screen === 'dance') return danceHtml();
-    if (state.screen === 'vote') return voteHtml();
-    if (state.screen === 'reveal') return revealHtml();
-    return lobbyHtml();
+    let html = lobbyHtml();
+    if (state.screen === 'library') html = libraryHtml();
+    else if (state.screen === 'deal' || state.screen === 'ready') html = readyHtml();
+    else if (state.screen === 'dance') html = danceHtml();
+    else if (state.screen === 'vote') html = voteHtml();
+    else if (state.screen === 'reveal') html = revealHtml();
+    if (state.screen === 'lobby' || !(isHost() && !isGuest())) return html;
+    return html.replace(/<\/div>\s*$/, abortButton() + '</div>');
+  }
+
+  function abortButton() {
+    return '<button type="button" class="btn bad" data-act="abort">Spiel abbrechen</button>';
   }
 
   function header() {
@@ -318,7 +324,7 @@
       seated: state.seated.map((player) => ({ id: String(player.id), pid: String(player.id), label: labelOf(player) })),
       startLabel: 'Musik wählen',
       startDisabled: state.seated.length < L.MIN_PLAYERS || isGuest(),
-      statsLabel: 'Mitspieler',
+      statsLabel: '',
       canRemove: !isGuest(),
       rulesHtml: '<p>Dieselbe Stelle, ' + danceSeconds() + ' Sekunden, eigene Kopfhörer. Eine Person hört nur „Du bist der Imposter“ und danach Stille. Danach stimmt ihr ab.</p>'
     };
@@ -333,8 +339,7 @@
           onPick: (id) => { seat(id); },
           onRemove: (id) => { if (!isGuest()) unseat(id); },
           onCreate: (draft) => { addPerson(draft.name, draft.tag); },
-          onStart: () => { if (!isGuest()) { state.screen = 'library'; render(); } },
-          onStats: () => { state.info = state.directory.length + ' gespeicherte Namen auf diesem Gerät.'; render(); }
+          onStart: () => { if (!isGuest()) { state.screen = 'library'; render(); } }
         });
         window.OpenScrRoster.setModel(rosterModel());
       }
@@ -345,7 +350,7 @@
       window.OpenScrQr.attach(el, {
         onScan: () => { const mp = mpApi(); if (mp && mp.join) mp.join({ scan: true, name: 'Gast' }); },
         onHost: () => { state.qr.open = 'host'; paintHostQr(); },
-        onDownload: () => { state.qr.open = 'download'; state.qr.share = SCRAP_URL; state.qr.note = 'In OpenScr scannen, um Imposter Dance zu laden.'; pushQr(); },
+        onDownload: () => { paintDownloadQr(); },
         onWlan: () => { state.qr.hostLink = 'wlan'; paintHostQr(); },
         onHotspot: () => { state.qr.hostLink = 'hotspot'; state.qr.note = 'Name und Passwort eintragen.'; pushQr(); },
         onHotspotShow: (draft) => { state.qr.ssid = draft.ssid; state.qr.pass = draft.pass; paintHostQr(); },
@@ -374,8 +379,26 @@
     });
   }
 
+  function wifiPayload(ssid, password) {
+    const escWifi = (value) => String(value || '').replace(/([\\;,:"])/g, '\\$1');
+    return 'WIFI:T:WPA;S:' + escWifi(ssid) + ';P:' + escWifi(password) + ';;';
+  }
+
+  async function qrImage(text) {
+    const mp = mpApi();
+    if (!mp || typeof mp.qrDataUrl !== 'function' || !text) return '';
+    return mp.qrDataUrl(text);
+  }
+
+  async function hostCodes() {
+    const mp = mpApi();
+    if (!mp || typeof mp.codes !== 'function') return null;
+    try { return await mp.codes(); } catch (error) { return null; }
+  }
+
   async function paintHostQr() {
     state.qr.open = 'host';
+    state.qr.copied = false;
     try {
       await ensureHost();
     } catch (error) {
@@ -384,18 +407,38 @@
       render();
       return;
     }
-    const mp = mpApi();
-    if (state.qr.hostLink === 'wlan' && mp && mp.showWifiQr) {
-      try { await mp.showWifiQr(); state.qr.note = 'Stellt sicher, dass ihr im selben WLAN seid.'; } catch (error) { state.qr.note = errorText(error); }
-    } else if (state.qr.hostLink === 'hotspot' && mp && mp.showHotspotQr) {
-      try { await mp.showHotspotQr(); } catch (error) { state.qr.note = errorText(error); }
-    } else if (mp && mp.showQr) {
-      try {
-        const shown = await mp.showQr();
-        if (shown && shown.roomCode) state.roomCode = shown.roomCode;
-        state.qr.note = 'Gleiches WLAN. Der Code öffnet das Spiel im Browser.';
-      } catch (error) { state.qr.note = errorText(error); }
-    } else state.qr.note = 'Die Einladung öffnet OpenScr auf dem Host-Handy.';
+    let codes = await hostCodes();
+    if (codes && !codes.gameUrl) {
+      await wait(700);
+      codes = await hostCodes();
+    }
+    if (codes && codes.roomCode) state.roomCode = codes.roomCode;
+    const gameUrl = codes && (codes.gameUrl || codes.qrPayload) || '';
+    state.qr.share = gameUrl;
+    if (state.qr.hostLink === 'hotspot') {
+      if (!state.qr.ssid) {
+        state.qr.image = '';
+        state.qr.note = 'Name und Passwort eintragen.';
+        render();
+        return;
+      }
+      state.qr.image = await qrImage(wifiPayload(state.qr.ssid, state.qr.pass));
+      state.qr.note = 'Hotspot-Code scannen, danach denselben Spiel-Link öffnen.';
+    } else {
+      state.qr.image = gameUrl ? await qrImage(gameUrl) : '';
+      state.qr.note = gameUrl
+        ? 'Stellt sicher, dass ihr im selben WLAN seid.'
+        : 'Der Spiel-Link wird vorbereitet.';
+    }
+    render();
+  }
+
+  async function paintDownloadQr() {
+    state.qr.open = 'download';
+    state.qr.copied = false;
+    state.qr.share = SCRAP_URL;
+    state.qr.note = 'In OpenScr scannen, um Imposter Dance zu laden.';
+    state.qr.image = await qrImage(SCRAP_URL);
     render();
   }
 
@@ -687,6 +730,7 @@
     const localAt = L.localStartAt(startAt, offset);
     const waitMs = Math.max(0, localAt - Date.now());
     const durationMs = playMs();
+    const gen = playGen;
     const audioApi = bridgeAudio();
     if (audioApi && typeof audioApi.schedulePlay === 'function' && state.clipBytes) {
       if (typeof audioApi.stop === 'function') audioApi.stop();
@@ -695,12 +739,12 @@
         startAtMs: localAt,
         durationMs: durationMs
       }).catch((error) => { state.error = errorText(error); });
-      window.setTimeout(finishDance, waitMs + durationMs);
+      window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
       return;
     }
     const ctx = audioContext();
     if (ctx && state.clip) startBuffer(ctx.currentTime + waitMs / 1000, durationMs / 1000);
-    window.setTimeout(finishDance, waitMs + durationMs);
+    window.setTimeout(() => { if (gen === playGen) finishDance(); }, waitMs + durationMs);
   }
 
   function startBuffer(when, seconds) {
@@ -716,6 +760,37 @@
     source.start(when);
     source.stop(when + (seconds || danceSeconds()));
     state.playSource = source;
+  }
+
+  function stopPlayback() {
+    playGen += 1;
+    if (state.playSource) {
+      try { state.playSource.stop(); } catch (error) { /* schon zu Ende */ }
+      state.playSource = null;
+    }
+    const audioApi = bridgeAudio();
+    if (audioApi && typeof audioApi.stop === 'function') {
+      try { audioApi.stop(); } catch (error) { /* kein laufender Ton */ }
+    }
+  }
+
+  function abortGame() {
+    if (!(isHost() && !isGuest())) return;
+    stopPlayback();
+    state.clip = null;
+    state.clipBytes = null;
+    state.nextClip = null;
+    state.progress = {};
+    state.pendingClaim = '';
+    state.busy = false;
+    state.error = '';
+    state.info = 'Spiel abgebrochen.';
+    state.screen = 'lobby';
+    syncMatchPlayers();
+    state.match.round = 0;
+    postShell('index');
+    publish();
+    render();
   }
 
   function finishDance() {
@@ -899,6 +974,7 @@
     state.role = 'host';
     state.roomCode = room && room.roomCode || '';
     state.selfDevice = room && (room.playerId || room.selfId) || state.selfDevice;
+    publish();
   }
 
   async function bootNet() {
@@ -1030,6 +1106,7 @@
     if (act === 'save-person') addPerson(($('draft-name') || {}).value, ($('draft-tag') || {}).value);
     if (act === 'to-library') { state.screen = 'library'; render(); }
     if (act === 'back-lobby') { state.screen = 'lobby'; postShell('index'); render(); }
+    if (act === 'abort') abortGame();
     if (act === 'pick') return;
     if (act === 'pick-file') pickFiles();
     if (act === 'source') {
@@ -1232,6 +1309,7 @@
     const pick = document.getElementById('file-pick');
     bootNet().then(() => {
       if (!state.myPid && state.seated[0]) state.myPid = state.seated[0].id;
+      if (state.role === 'host') publish();
       render();
     });
     if (pick) { /* Dateiinput liegt im Library-Screen. */ }
