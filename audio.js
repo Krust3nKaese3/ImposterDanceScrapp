@@ -219,7 +219,7 @@
       const slice = raw.subarray(i * BINARY_MAX, Math.min(raw.length, (i + 1) * BINARY_MAX));
       const copy = new Uint8Array(slice.length);
       copy.set(slice);
-      parts.push({ id: id + '#' + i + '/' + n, bytes: copy });
+      parts.push({ id: id + '_' + i + '_' + n, bytes: copy });
     }
     return parts;
   }
@@ -231,15 +231,13 @@
   function takeBinaryPart(assembler, message) {
     if (!message || !message.id || !message.bytes) return null;
     const id = String(message.id);
-    const mark = id.lastIndexOf('#');
-    const head = mark < 0 ? '' : id.slice(mark + 1);
-    const slash = head.indexOf('/');
-    const index = slash < 0 ? NaN : Number(head.slice(0, slash));
-    const count = slash < 0 ? NaN : Number(head.slice(slash + 1));
-    if (mark < 0 || !Number.isInteger(index) || !Number.isInteger(count) || count < 2 || index < 0 || index >= count) {
+    const mark = id.match(/^(.*)_(\d+)_(\d+)$/);
+    const clipId = mark ? mark[1] : '';
+    const index = mark ? Number(mark[2]) : NaN;
+    const count = mark ? Number(mark[3]) : NaN;
+    if (!mark || !clipId || count < 2 || index < 0 || index >= count) {
       return { id: id, bytes: message.bytes };
     }
-    const clipId = id.slice(0, mark);
     const bucket = assembler.clips[clipId] || (assembler.clips[clipId] = { n: count, parts: [] });
     bucket.n = count;
     bucket.parts[index] = message.bytes;

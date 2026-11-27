@@ -132,6 +132,7 @@ assert.strictEqual(one.length, 1);
 assert.strictEqual(one[0].id, 'c1');
 const splitBin = A.binaryParts(longClip, 'c1');
 assert.strictEqual(splitBin.length, 2);
+splitBin.forEach((part) => assert.ok(/^[A-Za-z0-9_-]+$/.test(part.id) && part.id.length <= 32));
 splitBin.forEach((part) => assert.ok(part.bytes.length <= A.BINARY_MAX));
 const binAsm = A.createAssembler();
 assert.strictEqual(A.takeBinaryPart(binAsm, splitBin[1]), null);
