@@ -130,6 +130,7 @@
     if (state.shell === 'qr') root.innerHTML = qrHtml();
     else if (state.shell === 'options') root.innerHTML = optionsHtml();
     else root.innerHTML = screenHtml();
+    document.body.classList.toggle('library-lock', state.shell === 'index' && state.screen === 'library' && !isGuest());
     mountShared();
   }
 
@@ -218,6 +219,18 @@
     }).join('');
   }
 
+  function hitChosen(hit) {
+    return state.tracks.some((track) => track.item && String(track.item.id) === String(hit.id));
+  }
+
+  function hitButtons() {
+    if (!state.hits.length) return '<p class="hint">Noch keine Treffer.</p>';
+    return state.hits.map((hit) => {
+      const on = hitChosen(hit);
+      return `<button type="button" class="choice${on ? ' on' : ''}" role="listitem" data-act="add-hit" data-id="${esc(hit.id)}" aria-pressed="${on ? 'true' : 'false'}">${esc(hit.title || hit.name || hit.id)}</button>`;
+    }).join('');
+  }
+
   function sourceBar() {
     const list = S.list();
     if (list.length < 2) return '';
@@ -244,10 +257,12 @@
       </section>`
       : `<section class="card stack">
         <h2>${esc(source.name)}</h2>
-        <p class="hint">Suche einen Titel. Der Host holt daraus ${danceSeconds()} Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>
-        <input id="source-query" type="text" maxlength="80" placeholder="Suchen" aria-label="Musik suchen" value="${esc(state.sourceQuery)}">
-        <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
-        ${state.hits.map((hit) => `<button type="button" class="choice" data-act="add-hit" data-id="${esc(hit.id)}">${esc(hit.title || hit.name || hit.id)}</button>`).join('') || '<p class="hint">Noch keine Treffer.</p>'}
+        ${state.hits.length ? '' : `<p class="hint">Suche einen Titel. Der Host holt daraus ${danceSeconds()} Sekunden und verteilt dasselbe Paket wie bei einer MP3.</p>`}
+        <div class="row">
+          <input id="source-query" type="text" maxlength="80" placeholder="Suchen" aria-label="Musik suchen" value="${esc(state.sourceQuery)}">
+          <button type="button" class="btn secondary" data-act="search-source" ${state.busy ? 'disabled' : ''}>Suchen</button>
+        </div>
+        <div class="hitlist" role="list">${hitButtons()}</div>
         ${trackRows() || '<p class="hint">Noch nichts für die Runde gewählt.</p>'}
       </section>`;
     return `${header()}<div class="stack">${banners()}

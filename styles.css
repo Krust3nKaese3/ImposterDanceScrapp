@@ -42,8 +42,19 @@ h2 { font-size: 20px; margin: 0; }
 .loadbar { width: 72px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
 .loadbar span { display: block; height: 100%; background: var(--lime); }
 .choice { width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; border-radius: 16px; }
+.choice:active { transform: scale(0.98); filter: brightness(1.2); }
 .choice.done { opacity: 0.45; }
-.choice.mine { box-shadow: inset 0 0 0 2px var(--lime); }
+.choice.mine, .choice.on { box-shadow: inset 0 0 0 2px var(--lime); }
+.hitlist { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; -webkit-overflow-scrolling: touch; }
+body.library-lock { height: 100dvh; overflow: hidden; }
+body.library-lock #app { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; padding: 8px 16px; }
+body.library-lock .top { margin-bottom: 6px; }
+body.library-lock h1 { font-size: 22px; }
+body.library-lock #app > .stack { flex: 1; min-height: 0; }
+body.library-lock .card.stack { flex: 1; min-height: 0; }
+body.library-lock .hitlist { flex: 1; }
+body.library-lock .stack > .btn,
+body.library-lock .sourcebar { flex-shrink: 0; }
 .roster { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { background: #1c1c22; border-radius: 999px; min-height: 36px; padding: 8px 12px; }
 .row { display: flex; gap: 8px; }
